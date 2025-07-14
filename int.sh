@@ -1,19 +1,28 @@
 #!/bin/bash
 
-# Base URL of the API
+# CLIII - Command Line Interface for ThinkAI
+# Think of this as a smart terminal that remembers your conversations
+# and can execute commands and manage files based on AI responses
+
+# Base URL of the API - This is where we send your messages to get AI responses
 BASE_URL="https://thinkai.lat/api"
 
 # Directory for storing conversation data
+# Like a diary that never forgets - all your chats are saved here
 CONV_DIR="$HOME/.cliii/conversations"
+# This file tells us which conversation you're currently having
 CURRENT_CONV_FILE="$HOME/.cliii/current_conversation"
 
 # Initialize conversation directory
+# Like setting up folders for a filing cabinet before you start filing
 init_conversation_storage() {
-    mkdir -p "$CONV_DIR"
-    mkdir -p "$(dirname "$CURRENT_CONV_FILE")"
+    mkdir -p "$CONV_DIR"                        # Create conversations folder
+    mkdir -p "$(dirname "$CURRENT_CONV_FILE")"  # Create .cliii folder
 }
 
 # Generate a new conversation ID
+# Like creating a unique name tag for each conversation
+# Format: conv_YYYYMMDD_HHMMSS_ProcessID (so it's always unique)
 generate_conversation_id() {
     echo "conv_$(date +%Y%m%d_%H%M%S)_$$"
 }
@@ -30,27 +39,33 @@ load_current_conversation() {
 }
 
 # Save message to conversation history
+# Like writing in a diary - who said what and when
+# This is crucial for maintaining context across sessions
 save_to_conversation() {
-    local conv_id=$1
-    local role=$2
-    local message=$3
-    local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    local conv_id=$1      # Which conversation notebook to write in
+    local role=$2         # Who's talking: "user" (you) or "assistant" (AI)
+    local message=$3      # What was said
+    local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")  # When it was said
     
     local conv_file="$CONV_DIR/${conv_id}.json"
     
     # Create or append to conversation file
+    # If this is a new conversation, create a new JSON file with empty messages
     if [[ ! -f "$conv_file" ]]; then
         echo '{"conversation_id":"'"$conv_id"'","messages":[]}' > "$conv_file"
     fi
     
     # Add message to conversation
+    # We use a temporary file to avoid corrupting the JSON if something goes wrong
     local temp_file="${conv_file}.tmp"
     if command -v jq &> /dev/null; then
+        # jq is like a Swiss Army knife for JSON - it safely adds our message
+        # --arg creates variables that are properly escaped (no broken JSON!)
         jq --arg role "$role" --arg content "$message" --arg ts "$timestamp" \
             '.messages += [{"role": $role, "content": $content, "timestamp": $ts}]' \
             "$conv_file" > "$temp_file" && mv "$temp_file" "$conv_file"
     else
-        # Fallback: append to file manually (basic JSON handling)
+        # Without jq, we can't safely modify JSON (risky with special characters)
         echo "Warning: jq not found. Using basic append method." >&2
         # This is a simplified fallback - in production, install jq
     fi
@@ -71,17 +86,22 @@ get_conversation_history() {
 }
 
 # Function to send a message to ThinkAI and get a response
+# This is the heart of CLIII - it sends your message along with conversation
+# history to the AI and gets back a response that might include commands to run
 send_to_thinkai() {
-    local message=$1
-    local conv_id=$2
-    local context=""
+    local message=$1      # Your message to the AI
+    local conv_id=$2      # Which conversation this belongs to
+    local context=""      # Previous messages for context (like reminding the AI what you talked about)
     
     # Get recent conversation history (last 10 messages for context)
+    # Like showing the AI the last page of your conversation so it remembers what you were talking about
+    # We limit to 10 messages to keep the API request size reasonable
     if [[ -n "$conv_id" ]] && [[ -f "$CONV_DIR/${conv_id}.json" ]]; then
         if command -v jq &> /dev/null; then
+            # Extract last 10 messages and format them for the API
             context=$(jq -r '.messages[-10:] | map({"role": .role, "content": .content}) | @json' "$CONV_DIR/${conv_id}.json" 2>/dev/null || echo "[]")
         else
-            context="[]"
+            context="[]"  # No context if jq isn't installed
         fi
     else
         context="[]"
@@ -95,49 +115,63 @@ send_to_thinkai() {
 }
 
 # Function to display text with color
+# Makes the AI's responses pretty and readable in the terminal
 display_colored_text() {
     local text=$1
-    # Using ANSI escape codes for colors
+    # \033[1;36m = bright cyan color, \033[0m = reset to normal
+    # The sed commands break up JSON-like text to make it more readable
+    # Think of it as pretty-printing for humans instead of machines
     echo -e "\033[1;36m$text\033[0m" | sed 's/"/\n/g' | sed "s/{/\n/g" | sed "s/}/\n/g" | sed "s/,/\n/g" | sed "s/response://g" | sed "s/ThinkAI://g"
 }
 
 # Function to display a simple animation
+# Shows a spinning character while waiting for the AI response
+# Like a loading spinner that says "I'm thinking..."
 display_animation() {
-    local frames=("|" "/" "-" "\\")
-    for i in {1..10}; do
+    local frames=("|" "/" "-" "\\")  # The spinner characters
+    for i in {1..10}; do              # Spin 10 times
         for frame in "${frames[@]}"; do
-            echo -ne "\r$frame"
-            sleep 0.1
+            echo -ne "\r$frame"       # \r returns cursor to start of line
+            sleep 0.1                 # Wait 100ms between frames
         done
     done
-    echo -ne "\r"
+    echo -ne "\r"                    # Clear the spinner
 }
 
 # Function to handle file operations
+# When the AI wants to create, edit, or delete files, this function does the actual work
+# Like being the AI's hands in your file system
 handle_file_operations() {
-    local operation=$1
-    local content=$2
-    local file_path=$3
-    local old_content=$4
+    local operation=$1    # What to do: write, edit, append, delete, mkdir, read
+    local content=$2      # What to write/append (if applicable)
+    local file_path=$3    # Where to do it
+    local old_content=$4  # What to replace (for edit operations)
 
     case "$operation" in
         "write")
-            # Create directory if it doesn't exist
+            # Create any parent directories needed (like mkdir -p does)
+            # dirname gets the directory part of the path
             mkdir -p "$(dirname "$file_path")"
+            # Write content to file (> overwrites existing content)
             echo -e "$content" > "$file_path"
+            # Green checkmark with success message
             echo -e "\033[1;32m✓ File $file_path has been written\033[0m"
             ;;
         "edit")
             if [[ -f "$file_path" ]]; then
-                # Replace old content with new content
+                # Two ways to edit:
                 if [[ -n "$old_content" ]]; then
+                    # 1. Find and replace specific content
+                    # sed -i modifies file in-place, s|old|new|g replaces all occurrences
                     sed -i "s|$old_content|$content|g" "$file_path"
                     echo -e "\033[1;32m✓ Edited file: $file_path\033[0m"
                 else
+                    # 2. Replace entire file content
                     echo -e "$content" > "$file_path"
                     echo -e "\033[1;32m✓ Replaced content in: $file_path\033[0m"
                 fi
             else
+                # Red X for errors
                 echo -e "\033[1;31m✗ File not found: $file_path\033[0m"
             fi
             ;;
@@ -174,9 +208,11 @@ handle_file_operations() {
 }
 
 # Function to execute a command locally
+# When the AI wants to run commands (like 'npm install' or 'mkdir project')
+# This function is like giving the AI temporary control of your terminal
 execute_command() {
-    local command=$1
-    local working_dir=$2
+    local command=$1      # The command to run (e.g., "ls -la")
+    local working_dir=$2  # Where to run it from (optional)
     
     echo -e "\033[1;33mExecuting command: $command\033[0m"
     
@@ -188,8 +224,10 @@ execute_command() {
     # Execute command and capture output/error
     local output
     local exit_code
+    # eval runs the command string as if you typed it
+    # 2>&1 captures both normal output and errors
     output=$(eval "$command" 2>&1)
-    exit_code=$?
+    exit_code=$?  # $? stores the exit code of the last command (0 = success)
     
     # Display output
     if [[ -n "$output" ]]; then
@@ -268,6 +306,11 @@ show_history() {
 }
 
 # Main interactive loop
+# This is where the magic happens - an infinite loop that:
+# 1. Waits for your input
+# 2. Sends it to the AI
+# 3. Shows the response
+# 4. Executes any commands or file operations the AI suggests
 echo -e "\033[1;35mWelcome to ThinkAI CLI with conversation persistence!\033[0m"
 echo -e "\033[1;36mCommands: /new, /list, /switch <id>, /history, /clear, exit\033[0m"
 
@@ -342,11 +385,15 @@ while true; do
     display_colored_text "$response_text"
 
     # Parse response for operations (enhanced parsing)
+    # The AI can respond with text AND instructions to run commands or manage files
+    # This section figures out what the AI wants us to do
     if command -v jq &> /dev/null; then
         # Check for legacy execute format
+        # Some API responses use {"execute": true, "command": "ls"} format
         if [[ $(echo "$response" | jq -r '.execute // false' 2>/dev/null) == "true" ]]; then
+            # Extract the command field, or empty if not found
             cmd=$(echo "$response" | jq -r '.command // empty' 2>/dev/null)
-            if [[ -n "$cmd" ]]; then
+            if [[ -n "$cmd" ]]; then  # -n checks if string is not empty
                 execute_command "$cmd"
             fi
         fi
@@ -362,15 +409,19 @@ while true; do
         fi
         
         # Check if response contains operations
+        # Modern format: {"operations": [{"type": "file", ...}, {"type": "command", ...}]}
         has_operations=$(echo "$response" | jq -r '.operations // empty' 2>/dev/null)
         
         if [[ -n "$has_operations" ]]; then
-            # Process each operation
+            # Count how many operations we need to perform
             num_ops=$(echo "$response" | jq '.operations | length' 2>/dev/null || echo 0)
             
+            # Loop through each operation in the array
             for ((i=0; i<num_ops; i++)); do
+                # Get the type of this operation (file or command)
                 op_type=$(echo "$response" | jq -r ".operations[$i].type" 2>/dev/null)
                 
+                # Handle each type of operation differently
                 case "$op_type" in
                     "file")
                         operation=$(echo "$response" | jq -r ".operations[$i].operation" 2>/dev/null)
@@ -392,7 +443,10 @@ while true; do
         fi
     else
         # Fallback: Simple pattern matching for backwards compatibility
+        # If jq isn't installed, we try basic string matching (less reliable)
         if [[ "$response" == *"execute"* ]]; then
+            # grep -oP uses Perl regex to find text after '"command": "'
+            # The || true prevents the script from exiting if grep finds nothing
             cmd=$(echo "$response" | grep -oP '(?<="command": ")[^"]+' || true)
             if [[ -n "$cmd" ]]; then
                 execute_command "$cmd"
