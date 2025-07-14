@@ -45,9 +45,15 @@ save_to_conversation() {
     
     # Add message to conversation
     local temp_file="${conv_file}.tmp"
-    jq --arg role "$role" --arg content "$message" --arg ts "$timestamp" \
-        '.messages += [{"role": $role, "content": $content, "timestamp": $ts}]' \
-        "$conv_file" > "$temp_file" && mv "$temp_file" "$conv_file"
+    if command -v jq &> /dev/null; then
+        jq --arg role "$role" --arg content "$message" --arg ts "$timestamp" \
+            '.messages += [{"role": $role, "content": $content, "timestamp": $ts}]' \
+            "$conv_file" > "$temp_file" && mv "$temp_file" "$conv_file"
+    else
+        # Fallback: append to file manually (basic JSON handling)
+        echo "Warning: jq not found. Using basic append method." >&2
+        # This is a simplified fallback - in production, install jq
+    fi
 }
 
 # Get conversation history
@@ -56,7 +62,11 @@ get_conversation_history() {
     local conv_file="$CONV_DIR/${conv_id}.json"
     
     if [[ -f "$conv_file" ]]; then
-        jq -r '.messages[] | "[\(.role)]: \(.content)"' "$conv_file"
+        if command -v jq &> /dev/null; then
+            jq -r '.messages[] | "[\(.role)]: \(.content)"' "$conv_file"
+        else
+            echo "Warning: jq not found. Cannot display history." >&2
+        fi
     fi
 }
 
@@ -68,7 +78,11 @@ send_to_thinkai() {
     
     # Get recent conversation history (last 10 messages for context)
     if [[ -n "$conv_id" ]] && [[ -f "$CONV_DIR/${conv_id}.json" ]]; then
-        context=$(jq -r '.messages[-10:] | map({"role": .role, "content": .content}) | @json' "$CONV_DIR/${conv_id}.json" 2>/dev/null || echo "[]")
+        if command -v jq &> /dev/null; then
+            context=$(jq -r '.messages[-10:] | map({"role": .role, "content": .content}) | @json' "$CONV_DIR/${conv_id}.json" 2>/dev/null || echo "[]")
+        else
+            context="[]"
+        fi
     else
         context="[]"
     fi
@@ -127,8 +141,8 @@ list_conversations() {
         for conv_file in "$CONV_DIR"/*.json; do
             if [[ -f "$conv_file" ]]; then
                 local conv_id=$(basename "$conv_file" .json)
-                local msg_count=$(jq '.messages | length' "$conv_file")
-                local last_msg=$(jq -r '.messages[-1].timestamp // "No messages"' "$conv_file")
+                local msg_count=$(jq '.messages | length' "$conv_file" 2>/dev/null || echo "?")
+                local last_msg=$(jq -r '.messages[-1].timestamp // "No messages"' "$conv_file" 2>/dev/null || echo "Unknown")
                 echo -e "  \033[1;33m$conv_id\033[0m - Messages: $msg_count, Last: $last_msg"
             fi
         done
@@ -166,7 +180,11 @@ show_history() {
     
     echo -e "\033[1;36mConversation history for: $conv_id\033[0m"
     if [[ -f "$CONV_DIR/${conv_id}.json" ]]; then
-        jq -r '.messages[] | "\(.timestamp) [\(.role)]: \(.content)"' "$CONV_DIR/${conv_id}.json"
+        if command -v jq &> /dev/null; then
+            jq -r '.messages[] | "\(.timestamp) [\(.role)]: \(.content)"' "$CONV_DIR/${conv_id}.json"
+        else
+            echo "Warning: jq not found. Cannot display detailed history."
+        fi
     else
         echo "No history found."
     fi
@@ -234,7 +252,11 @@ while true; do
     echo -ne "\r"
 
     # Extract just the response text (assuming JSON response)
-    response_text=$(echo "$response" | jq -r '.response // .message // .' 2>/dev/null || echo "$response")
+    if command -v jq &> /dev/null; then
+        response_text=$(echo "$response" | jq -r '.response // .message // .' 2>/dev/null || echo "$response")
+    else
+        response_text="$response"
+    fi
     
     # Save assistant response to conversation
     save_to_conversation "$current_conversation" "assistant" "$response_text"

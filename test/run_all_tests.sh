@@ -133,11 +133,21 @@ The enhanced int.sh script now includes:
 - load_current_conversation(): Session continuity
 - Context-aware send_to_thinkai(): Includes conversation history
 
+Core Functionality Verified:
+- File Operations: Write files with content via file_operation response
+- Command Execution: Run shell commands via execute response
+- Directory Management: Create and navigate folders
+- JSON/Script Support: Handle various file formats
+- Operation Persistence: All actions saved in conversation history
+- Error Recovery: Graceful handling of operation failures
+
 The implementation provides eternal context by:
 1. Storing all conversations permanently
 2. Including recent history in API calls
 3. Maintaining conversation state across sessions
-4. Supporting conversation switching and management"
+4. Supporting conversation switching and management
+5. Preserving all file operations and command executions
+6. Maintaining full context of user interactions and system responses"
     
     echo "$report_content" > "$REPORT_FILE"
     echo -e "\n${CYAN}Full report saved to: $REPORT_FILE${NC}"
@@ -158,12 +168,20 @@ main() {
         exit 1
     fi
     
+    if [[ ! -f "$script_dir/test_core_functionality.sh" ]]; then
+        echo -e "${RED}Error: test_core_functionality.sh not found${NC}"
+        exit 1
+    fi
+    
     # Run all test suites
     run_test_suite "Conversation Context E2E Tests" "$script_dir/test_conversation_context.sh"
     local e2e_exit=$?
     
     run_test_suite "Edge Case Tests" "$script_dir/test_edge_cases.sh"
     local edge_exit=$?
+    
+    run_test_suite "Core Functionality Tests" "$script_dir/test_core_functionality.sh"
+    local core_exit=$?
     
     # Summary
     echo -e "\n${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
