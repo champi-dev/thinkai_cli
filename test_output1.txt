@@ -1,0 +1,23 @@
+[1;35mWelcome to ThinkAI CLI (Fixed Version)![0m
+[1;36mType 'exit' to quit[0m
+[1;32mConversation: conv_20250713_223431_5294[0m
+[1;32m🤖 Agentic mode enabled[0m
+|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\[1;36mCertainly! Below is an example of a simple Node.js script that prints "Hello, World!" to the console and also serves as an HTTP server to listen for incoming requests at port 3000. This script will help you get started with Node.js.```javascript// Import the http moduleconst http = require('http');// Function to start the serverfunction createServer() {    // Create a server using the http module    const server = http.createServer((req, res) => {        // Set response status code and content type for HTTP request        res.statusCode = 200;        res.setHeader('Content-Type', 'text/plain');                // Write response body as per status line        res.end('Hello World\n');    });    // Listen to requests on port 3000    server.listen(3000, () => {        console.log("Server is running at http://localhost:3000");    });}// Call the function to create and start the servercreateServer();```To run this script:1. Save it in a file with a `.js` extension (e.g., `simple-server.js`).2. Open your terminal or command prompt.3. Navigate to the directory where you saved the script.4. Run the script using Node.js by typing `node simple-server.js`.5. Open your web browser and navigate to `http://localhost:3000`, you should see "Hello World" displayed.This is a very basic example, but it demonstrates how to create a simple HTTP server in Node.js. You can expand on this by adding more functionality as needed for your applications.[0m
+
+[1;36m🤖 Executing 1 operations...[0m
+[1;33mExecuting command: node simple-server.js[0m
+node:internal/modules/cjs/loader:1137
+  throw err;
+  ^
+
+Error: Cannot find module '/home/champi/Dev/thinkai_cli/simple-server.js'
+    at Module._resolveFilename (node:internal/modules/cjs/loader:1134:15)
+    at Module._load (node:internal/modules/cjs/loader:975:27)
+    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:128:12)
+    at node:internal/main/run_main_module:28:49 {
+  code: 'MODULE_NOT_FOUND',
+  requireStack: []
+}
+
+Node.js v18.19.1
+[1;31m✗ Command failed with exit code: 1[0m

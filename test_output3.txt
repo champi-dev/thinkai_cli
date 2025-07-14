@@ -1,0 +1,5 @@
+[1;35mWelcome to ThinkAI CLI (Fixed Version)![0m
+[1;36mType 'exit' to quit[0m
+[1;32mConversation: conv_20250713_223431_5294[0m
+[1;32m🤖 Agentic mode enabled[0m
+|/-

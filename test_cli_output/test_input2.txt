@@ -1,0 +1,7 @@
+Let me list the files in the current directory:
+
+`ls -la`
+
+And create a test file:
+
+`echo "Test file content" > test.txt`

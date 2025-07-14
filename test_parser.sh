@@ -1,14 +1,170 @@
 #!/bin/bash
 
-# Extract just the parse_ai_response_to_operations function from int.sh
-# This avoids running the main loop
+# Extract necessary functions from int.sh without running the main loop
 
-# Create a temporary file with just the function
-temp_func=$(mktemp)
-sed -n '/^parse_ai_response_to_operations()/,/^}/p' /home/champi/Dev/thinkai_cli/int.sh > "$temp_func"
-
-# Source the function
-source "$temp_func"
+# Function to parse AI response to operations
+parse_ai_response_to_operations() {
+    local response_text=$1
+    local operations_json="[]"
+    
+    # Save response to temp file for easier processing
+    local temp_response=$(mktemp)
+    echo "$response_text" > "$temp_response"
+    
+    # Extract code blocks with improved pattern matching
+    local in_code_block=false
+    local current_lang=""
+    local current_code=""
+    local line_num=0
+    
+    while IFS= read -r line; do
+        ((line_num++))
+        
+        # Check for code block start
+        if [[ "$line" =~ ^\`\`\`([a-zA-Z0-9]+)?$ ]]; then
+            if [[ "$in_code_block" == "false" ]]; then
+                in_code_block=true
+                current_lang="${BASH_REMATCH[1]:-plaintext}"
+                current_code=""
+            else
+                # End of code block - process it
+                in_code_block=false
+                if [[ -n "$current_code" ]]; then
+                    local filename=""
+                    
+                    # Determine filename based on language and content
+                    case "$current_lang" in
+                        javascript|js)
+                            # Look for specific patterns in code
+                            if [[ "$current_code" =~ express|app\.listen ]]; then
+                                filename="server.js"
+                            elif [[ "$current_code" =~ \"name\".*\"version\".*\"dependencies\" ]]; then
+                                filename="package.json"
+                            else
+                                filename="app.js"
+                            fi
+                            ;;
+                        json)
+                            if [[ "$current_code" =~ \"name\".*\"version\".*\"dependencies\" ]]; then
+                                filename="package.json"
+                            elif [[ "$current_code" =~ \"compilerOptions\" ]]; then
+                                filename="tsconfig.json"
+                            else
+                                filename="config.json"
+                            fi
+                            ;;
+                        python|py)
+                            if [[ "$current_code" =~ __name__.*==.*__main__ ]]; then
+                                filename="main.py"
+                            elif [[ "$current_code" =~ from[[:space:]]+flask|from[[:space:]]+django ]]; then
+                                filename="app.py"
+                            else
+                                filename="script.py"
+                            fi
+                            ;;
+                        sh|bash)
+                            filename="script.sh"
+                            ;;
+                        html)
+                            filename="index.html"
+                            ;;
+                        css)
+                            filename="styles.css"
+                            ;;
+                        typescript|ts)
+                            if [[ "$current_code" =~ express|app\.listen ]]; then
+                                filename="server.ts"
+                            else
+                                filename="app.ts"
+                            fi
+                            ;;
+                        env|dotenv)
+                            filename=".env"
+                            ;;
+                        *)
+                            # Try to infer from the response context
+                            if [[ -n "$current_lang" && "$current_lang" != "plaintext" ]]; then
+                                filename="file.$current_lang"
+                            fi
+                            ;;
+                    esac
+                    
+                    # Add file operation if we have a filename
+                    if [[ -n "$filename" ]]; then
+                        # Properly escape the content for JSON
+                        local escaped_content=$(echo "$current_code" | jq -Rs .)
+                        local op=$(jq -n --arg path "$filename" --argjson content "$escaped_content" \
+                            '{type: "file", operation: "write", path: $path, content: $content}')
+                        operations_json=$(echo "$operations_json" | jq --argjson op "$op" '. += [$op]')
+                    fi
+                fi
+                current_code=""
+                current_lang=""
+            fi
+        elif [[ "$in_code_block" == "true" ]]; then
+            # Inside code block - accumulate code
+            if [[ -n "$current_code" ]]; then
+                current_code+=$'\n'
+            fi
+            current_code+="$line"
+        fi
+    done < "$temp_response"
+    
+    # Extract shell commands more intelligently
+    # First, look for commands in backticks
+    local backtick_commands=$(grep -oE '`[^`]+`' "$temp_response" | sed 's/`//g')
+    
+    # Then look for command patterns in plain text
+    local plain_commands=$(grep -E '^[[:space:]]*(npm|yarn|node|python|pip|git|mkdir|cd|ls|cat|echo|touch|cp|mv|rm|make|./|bash|sh)[[:space:]]+' "$temp_response" | \
+        grep -v '```' | \
+        sed 's/^[[:space:]]*//g' | sed 's/[[:space:]]*$//g')
+    
+    # Also look for "run" commands that should be translated to node/python
+    local run_commands=$(grep -E '(run|execute|start)[[:space:]]+[a-zA-Z0-9_.-]+\.(js|py|sh|rb)' "$temp_response" | \
+        sed 's/.*\(run\|execute\|start\)[[:space:]]\+//' | \
+        sed 's/^[[:space:]]*//g' | sed 's/[[:space:]]*$//g' | \
+        while read -r file; do
+            case "$file" in
+                *.js) echo "node $file" ;;
+                *.py) echo "python $file" ;;
+                *.sh) echo "bash $file" ;;
+                *.rb) echo "ruby $file" ;;
+            esac
+        done)
+    
+    # Combine and deduplicate commands
+    local all_commands=$(echo -e "$backtick_commands\n$plain_commands\n$run_commands" | sort -u)
+    
+    # Process commands
+    while IFS= read -r cmd; do
+        cmd=$(echo "$cmd" | sed 's/^[[:space:]]*//g' | sed 's/[[:space:]]*$//g')
+        if [[ -n "$cmd" ]]; then
+            # Filter out invalid commands
+            if [[ "$cmd" =~ ^(npm|yarn|node|python|pip|git|mkdir|cd|ls|cat|echo|touch|cp|mv|rm|make|bash|sh|\./|pnpm|bun|deno) ]]; then
+                # Skip if it's just a mention, not a command
+                if [[ ! "$cmd" =~ (the|a|an|with|using|via|like|such|called)[[:space:]]+(npm|yarn|node|python|pip|git) ]]; then
+                    # Special handling for npm/yarn commands
+                    if [[ "$cmd" =~ ^(npm|yarn|pnpm|bun)[[:space:]]+(init|install|i|add|remove|run|start|test|build) ]]; then
+                        local op=$(jq -n --arg cmd "$cmd" '{type: "command", command: $cmd}')
+                        operations_json=$(echo "$operations_json" | jq --argjson op "$op" '. += [$op]')
+                    # Handle other commands
+                    elif [[ ! "$cmd" =~ ^(npm|yarn|pnpm|bun) ]]; then
+                        local op=$(jq -n --arg cmd "$cmd" '{type: "command", command: $cmd}')
+                        operations_json=$(echo "$operations_json" | jq --argjson op "$op" '. += [$op]')
+                    fi
+                fi
+            fi
+        fi
+    done <<< "$all_commands"
+    
+    # Clean up
+    rm -f "$temp_response"
+    
+    # Return operations if any were found
+    if [[ $(echo "$operations_json" | jq 'length') -gt 0 ]]; then
+        echo "$operations_json"
+    fi
+}
 
 # Test response that simulates what the AI might return
 test_response='I'\''ll create an Express server with authentication for you.

@@ -1,152 +1,175 @@
-# CLIII - Command Line Interface for ThinkAI 🚀
+# ThinkAI CLI
 
-A smart terminal that remembers everything and can code for you!
-
-## What is CLIII?
-
-CLIII (pronounced "CLI-three") is like having a coding buddy in your terminal who:
-- 🧠 **Remembers Everything**: All conversations are saved forever
-- 💻 **Writes Code**: Creates files, edits code, runs commands
-- 🔄 **Maintains Context**: Picks up where you left off
-- 🛠️ **Executes Tasks**: Runs commands and manages your projects
-
-## Quick Start
-
-```bash
-# Make it executable
-chmod +x int.sh
-
-# Start CLIII
-./int.sh
-
-# Start coding!
-> Help me create a REST API for a todo list
-```
+A smart command-line interface that leverages the ThinkAI API to create files, execute commands, and assist with development tasks using natural language.
 
 ## Features
 
-### 💬 Persistent Conversations
-- `/new` - Start a new conversation
-- `/list` - See all your conversations  
-- `/switch <id>` - Continue a previous conversation
-- `/history` - View current conversation
-- `/clear` - Clear screen (conversation stays)
-
-### 🔧 For Software Development
-
-CLIII can help you:
-- **Generate Code**: "Create a user authentication system"
-- **Debug Issues**: "Fix this TypeError in my React component"
-- **Run Commands**: "Install express and create a server"
-- **Manage Files**: "Create a project structure for my app"
-- **Refactor Code**: "Convert this to use async/await"
-
-### 📁 File Operations
-- Write new files
-- Edit existing files
-- Append content
-- Delete files
-- Create directories
-- Read file contents
-
-### 🚀 Command Execution
-- Run any shell command
-- Install packages
-- Start servers
-- Run tests
-- Execute builds
-
-## How to Use for Coding Projects
-
-See [CODING_WITH_CLIII.md](CODING_WITH_CLIII.md) for detailed examples!
-
-### Example: Building a Web App
-
-```bash
-> Create an Express server with user authentication
-
-# CLIII will:
-# 1. Create project structure
-# 2. Write server code
-# 3. Set up routes
-# 4. Add authentication
-# 5. Install dependencies
-# 6. Run the server
-
-> Add a REST API for blog posts
-
-# CLIII remembers your project context and adds to it!
-```
+- 🤖 **Smart AI Integration**: Leverages ThinkAI API for intelligent responses
+- 📝 **Automatic File Creation**: Creates files based on natural language requests
+- 🚀 **Command Execution**: Executes commands suggested by the AI
+- 💬 **Conversation Memory**: Maintains context across sessions
+- 🔍 **Codebase Analysis**: Analyzes and indexes your project structure
+- ⚡ **Agentic Mode**: Automatically executes operations from AI responses
 
 ## Installation
 
-### Requirements
-- Bash shell
-- curl (for API calls)
-- jq (recommended for JSON parsing)
-- Internet connection
-
-### Setup
+### Quick Install
 
 ```bash
-git clone <repository>
+# Clone the repository
+git clone https://github.com/yourusername/thinkai_cli.git
 cd thinkai_cli
+
+# Run the installer
+chmod +x install.sh
+./install.sh
+```
+
+### Manual Installation
+
+1. Make the script executable:
+```bash
 chmod +x int.sh
-./int.sh
 ```
 
-## How It Works (Simple Explanation)
+2. Add to PATH (choose one):
 
-1. **You type a message** → 
-2. **CLIII sends it to ThinkAI** (with last 10 messages for context) →
-3. **AI responds** with text and/or instructions →
-4. **CLIII executes** any file operations or commands →
-5. **Everything is saved** in `~/.cliii/conversations/`
-
-## Project Structure
-
-```
-~/.cliii/
-├── conversations/           # All your saved conversations
-│   ├── conv_20250714_093021_1234.json
-│   └── ...
-└── current_conversation    # Which conversation you're in
+**Option A: System-wide (requires sudo)**
+```bash
+sudo ln -s $(pwd)/int.sh /usr/local/bin/thinkai
 ```
 
-## Tips
+**Option B: User-specific**
+```bash
+mkdir -p ~/.local/bin
+ln -s $(pwd)/int.sh ~/.local/bin/thinkai
 
-1. **Be Specific**: "Create a REST API with Express, MongoDB, and JWT auth"
-2. **Build Incrementally**: Start simple, add features one by one
-3. **Use Context**: "Remember the auth system we built? Add role permissions"
-4. **Review Code**: Always understand what CLIII creates
-5. **Commit Often**: CLIII creates files, but you should use git
+# Add to PATH if not already there
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+## Usage
+
+Simply type `thinkai` in your terminal:
+
+```bash
+thinkai
+```
+
+### Examples
+
+1. **Create a file:**
+```
+> create a hello.js file that prints Hello World
+```
+
+2. **Build a web server:**
+```
+> create an express server with authentication
+```
+
+3. **Execute commands:**
+```
+> list all JavaScript files in the current directory
+```
+
+4. **Analyze codebase:**
+```
+> /analyze
+```
+
+### Commands
+
+- `/new` - Start a new conversation
+- `/list` - List all conversations
+- `/switch <id>` - Switch to a different conversation
+- `/history` - Show conversation history
+- `/analyze` - Analyze current codebase
+- `/context` - Show codebase context
+- `exit` - Exit the CLI
+
+## How It Works
+
+ThinkAI CLI sends your requests to the ThinkAI API, which returns intelligent responses. When the AI suggests creating files or running commands, the CLI automatically:
+
+1. Parses the AI response for code blocks and commands
+2. Creates files with the suggested content
+3. Executes safe commands
+4. Shows you the results
+
+## Configuration
+
+### Environment Variables
+
+- `CLIII_AGENTIC_MODE` - Enable/disable automatic execution (default: true)
+- `DEBUG_MODE` - Enable debug output (default: false)
+- `CLIII_STREAMING` - Enable streaming responses (default: true)
+
+### Example
+
+```bash
+# Disable automatic execution
+export CLIII_AGENTIC_MODE=false
+thinkai
+
+# Enable debug mode
+export DEBUG_MODE=true
+thinkai
+```
+
+## Smart Features
+
+The CLI leverages ThinkAI API for:
+
+- **Natural Language Understanding**: Understands requests in plain English
+- **Code Generation**: Generates code in multiple languages
+- **Command Suggestions**: Suggests appropriate commands for tasks
+- **Error Analysis**: Analyzes and suggests fixes for errors
+- **Context Awareness**: Maintains conversation context
 
 ## Safety
 
-- CLIII can execute any command you could run
-- It has full access to your file system
-- Always review commands before letting them run
-- Use in a safe environment or container
+- Prevents execution of bare interpreter commands that would hang
+- Confirms dangerous operations
+- Creates backups before modifying files
+- Validates commands before execution
 
-## Testing
+## Dependencies
 
+- `bash` 4.0+
+- `curl` for API calls
+- `jq` for JSON processing
+- `node` (optional, for running JavaScript files)
+
+## Troubleshooting
+
+### Command not found
+Make sure `~/.local/bin` is in your PATH:
 ```bash
-cd test
-./run_all_tests.sh
+echo $PATH
+```
+
+### API Connection Issues
+Check your internet connection and that the API is accessible:
+```bash
+curl -I https://thinkai.lat
+```
+
+### Missing jq
+Install jq for better JSON handling:
+```bash
+# Ubuntu/Debian
+sudo apt-get install jq
+
+# macOS
+brew install jq
 ```
 
 ## Contributing
 
-1. Fork the repository
-2. Create your feature branch
-3. Add tests for new features
-4. Make sure all tests pass
-5. Submit a pull request
+Contributions are welcome! Please submit issues and pull requests.
 
 ## License
 
-[Your License Here]
-
----
-
-**Remember**: CLIII is a powerful tool. Use it wisely! 🎯
+MIT License - see LICENSE file for details

@@ -1,1 +1,1 @@
-const myModule = require('./my-module');
+node app.js

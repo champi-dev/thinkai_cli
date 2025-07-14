@@ -1,0 +1,8 @@
+I'll create a simple hello world script for you:
+
+```javascript
+console.log('Hello from ThinkAI CLI!');
+console.log('This file was created automatically.');
+```
+
+This script will print a greeting message.

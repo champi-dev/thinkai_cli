@@ -1,1 +1,1 @@
-DEBUG='app' node app.js
+pip install flask

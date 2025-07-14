@@ -1,0 +1,8 @@
+[1;35mWelcome to ThinkAI CLI with conversation persistence![0m
+[1;36mCommands: /new, /list, /switch <id>, /history, /clear, /analyze, /context, exit[0m
+[1;32m🤖 Agentic mode enabled - I'll automatically execute code and commands from AI responses[0m
+[1;33mTo disable: export CLIII_AGENTIC_MODE=false[0m
+[1;32mCurrent conversation: conv_20250713_223431_5294[0m
+|[1;90m[Streaming response...][0m
+/-\|/-\|[1;33mStreaming endpoint unavailable, falling back to standard API...[0m
+/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\

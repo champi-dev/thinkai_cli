@@ -1,0 +1,20 @@
+Certainly! Below is a simple `hello.js` file that will print "Hello World" when you run it. This example assumes you're using Node.js, which is the most common runtime environment for JavaScript files.
+
+```javascript
+// hello.js
+console.log("Hello World");
+```
+
+To run this file:
+
+1. Save the code above in a text editor or IDE and save it as `hello.js`.
+2. Open your terminal or command prompt.
+3. Navigate to the directory where you saved `hello.js`.
+4. Run the following command:
+   ```bash
+   node hello.js
+   ```
+
+You should see "Hello World" printed in the console.
+
+If you are using a different environment, such as running this script directly from your browser or another JavaScript runtime, please let me know so I can provide more specific instructions!
