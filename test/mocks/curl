@@ -1,0 +1,5 @@
+#!/bin/bash
+if [[ "$MOCK_CURL_EXIT_CODE" -ne 0 ]]; then
+    exit "$MOCK_CURL_EXIT_CODE"
+fi
+echo "$MOCK_CURL_OUTPUT"

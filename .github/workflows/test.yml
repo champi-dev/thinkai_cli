@@ -1,0 +1,92 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+    
+    - name: Set up test environment
+      run: |
+        # Ensure bats submodules are initialized
+        git submodule update --init --recursive
+        
+        # Make scripts executable
+        chmod +x int.sh
+        chmod +x test/mocks/curl
+        chmod +x test/coverage.sh
+        chmod +x bats-core/bin/bats
+    
+    - name: Run unit tests
+      run: |
+        ./bats-core/bin/bats test/unit_tests.bats
+    
+    - name: Run e2e tests
+      run: |
+        ./bats-core/bin/bats test/e2e_tests.bats
+    
+    - name: Run edge case tests
+      run: |
+        ./bats-core/bin/bats test/edge_cases.bats
+    
+    - name: Run all tests
+      run: |
+        ./bats-core/bin/bats test/*.bats
+    
+    - name: Install coverage tools (Ubuntu only)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y kcov || true
+    
+    - name: Generate coverage report (Ubuntu only)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        ./test/coverage.sh || echo "Coverage generation skipped"
+    
+    - name: Upload coverage artifacts
+      if: matrix.os == 'ubuntu-latest'
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-report
+        path: coverage/
+        if-no-files-found: ignore
+    
+    - name: Test summary
+      if: always()
+      run: |
+        echo "## Test Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Test Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        ./bats-core/bin/bats test/*.bats --formatter tap | tee test-results.tap || true
+        
+        total=$(grep -c "^ok\|^not ok" test-results.tap || echo "0")
+        passed=$(grep -c "^ok" test-results.tap || echo "0")
+        failed=$(grep -c "^not ok" test-results.tap || echo "0")
+        
+        echo "- Total tests: $total" >> $GITHUB_STEP_SUMMARY
+        echo "- Passed: $passed" >> $GITHUB_STEP_SUMMARY
+        echo "- Failed: $failed" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [ "$failed" -gt 0 ]; then
+          echo "### Failed Tests" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          grep "^not ok" test-results.tap >> $GITHUB_STEP_SUMMARY || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
+        fi
