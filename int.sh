@@ -81,7 +81,9 @@ while true; do
     if [[ "$response" == *"execute"* ]]; then
         command=$(echo "$response" | grep -oP '(?<="command": ")[^"]+')
         execute_command "$command"
-    elif [[ "$response" == *"file_operation"* ]]; then
+    fi
+    
+    if [[ "$response" == *"file_operation"* ]]; then
         operation=$(echo "$response" | grep -oP '(?<="operation": ")[^"]+')
         file_content=$(echo "$response" | grep -oP '(?<="content": ")[^"]+')
         file_name=$(echo "$response" | grep -oP '(?<="file_name": ")[^"]+')
