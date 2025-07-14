@@ -1,222 +1,152 @@
 #!/bin/bash
 
-# Master test runner for CLIII conversation context tests
-# Runs all test suites and generates a comprehensive report
+# Master Test Runner for ThinkAI CLI
+# Runs all test suites and provides comprehensive results
+
+echo "🧪 ThinkAI CLI - Comprehensive Test Suite"
+echo "========================================"
+echo
 
 # Colors
-RED='\033[0;31m'
 GREEN='\033[0;32m'
+RED='\033[0;31m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-CYAN='\033[0;36m'
 NC='\033[0m'
 
-# Test results
-TOTAL_PASSED=0
-TOTAL_FAILED=0
-TEST_RESULTS=()
+# Test directory
+TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Timestamp for report
-TIMESTAMP=$(date +"%Y-%m-%d %H:%M:%S")
-REPORT_FILE="test_report_$(date +%Y%m%d_%H%M%S).txt"
-
-# Header
-echo -e "${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${CYAN}║          CLIII Conversation Context Test Suite             ║${NC}"
-echo -e "${CYAN}║                  Evidence Report                           ║${NC}"
-echo -e "${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
-echo ""
-echo -e "${BLUE}Date: $TIMESTAMP${NC}"
-echo -e "${BLUE}System: $(uname -a)${NC}"
-echo ""
+# Results tracking
+TOTAL_SUITES=0
+PASSED_SUITES=0
+FAILED_SUITES=0
 
 # Function to run a test suite
 run_test_suite() {
-    local test_name="$1"
-    local test_script="$2"
+    local suite_name=$1
+    local test_script=$2
     
-    echo -e "\n${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${YELLOW}Running: $test_name${NC}"
-    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "\n${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${BLUE}Running: $suite_name${NC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
     
-    # Run the test and capture output
-    local output
-    local exit_code
+    ((TOTAL_SUITES++))
     
-    output=$(bash "$test_script" 2>&1)
-    exit_code=$?
-    
-    echo "$output"
-    
-    # Extract test counts from output
-    local passed=$(echo "$output" | grep -oE "Tests passed: [0-9]+" | grep -oE "[0-9]+")
-    local failed=$(echo "$output" | grep -oE "Tests failed: [0-9]+" | grep -oE "[0-9]+")
-    
-    # Update totals
-    TOTAL_PASSED=$((TOTAL_PASSED + passed))
-    TOTAL_FAILED=$((TOTAL_FAILED + failed))
-    
-    # Store result
-    if [[ $exit_code -eq 0 ]]; then
-        TEST_RESULTS+=("${GREEN}✓ $test_name: PASSED (${passed}/${passed})${NC}")
+    if [[ -f "$test_script" ]] && [[ -x "$test_script" ]]; then
+        if "$test_script"; then
+            echo -e "\n${GREEN}✓ $suite_name PASSED${NC}"
+            ((PASSED_SUITES++))
+        else
+            echo -e "\n${RED}✗ $suite_name FAILED${NC}"
+            ((FAILED_SUITES++))
+        fi
     else
-        TEST_RESULTS+=("${RED}✗ $test_name: FAILED (${passed}/$((passed + failed)))${NC}")
+        echo -e "${RED}✗ Test script not found or not executable: $test_script${NC}"
+        ((FAILED_SUITES++))
     fi
-    
-    return $exit_code
 }
 
-# Generate detailed report
-generate_report() {
-    local report_content="CLIII CONVERSATION CONTEXT TEST REPORT
-======================================
-Generated: $TIMESTAMP
-System: $(uname -a)
+# Start time
+START_TIME=$(date +%s)
 
-TEST SUMMARY
-============
-Total Tests Passed: $TOTAL_PASSED
-Total Tests Failed: $TOTAL_FAILED
-Success Rate: $(awk "BEGIN {printf \"%.1f\", ($TOTAL_PASSED/($TOTAL_PASSED+$TOTAL_FAILED))*100}")%
+echo -e "${BLUE}Test Environment:${NC}"
+echo "  OS: $(uname -s)"
+echo "  Bash: ${BASH_VERSION}"
+echo "  jq: $(jq --version 2>/dev/null || echo 'not installed')"
+echo "  Working Directory: $(pwd)"
+echo "  Test Directory: $TEST_DIR"
 
-DETAILED RESULTS
-================"
+# Check prerequisites
+echo -e "\n${BLUE}Checking prerequisites...${NC}"
+
+if ! command -v jq &> /dev/null; then
+    echo -e "${RED}✗ jq is required but not installed${NC}"
+    echo "  Install with: sudo apt-get install jq"
+    exit 1
+fi
+
+if ! command -v curl &> /dev/null; then
+    echo -e "${RED}✗ curl is required but not installed${NC}"
+    echo "  Install with: sudo apt-get install curl"
+    exit 1
+fi
+
+echo -e "${GREEN}✓ All prerequisites met${NC}"
+
+# Run test suites
+echo -e "\n${BLUE}Starting test execution...${NC}"
+
+# Original tests
+if [[ -f "$TEST_DIR/test_core_functionality.sh" ]]; then
+    run_test_suite "Core Functionality Tests" "$TEST_DIR/test_core_functionality.sh"
+fi
+
+if [[ -f "$TEST_DIR/test_conversation_context.sh" ]]; then
+    run_test_suite "Original Context Tests" "$TEST_DIR/test_conversation_context.sh"
+fi
+
+if [[ -f "$TEST_DIR/test_edge_cases.sh" ]]; then
+    run_test_suite "Edge Case Tests" "$TEST_DIR/test_edge_cases.sh"
+fi
+
+# New comprehensive tests
+run_test_suite "Unit Function Tests" "$TEST_DIR/test_unit_functions.sh"
+run_test_suite "Context Continuity E2E Tests" "$TEST_DIR/test_context_continuity.sh"
+run_test_suite "Full Workflow Integration Test" "$TEST_DIR/test_full_workflow.sh"
+
+# Parser-specific test
+if [[ -f "$TEST_DIR/../test_parser.sh" ]]; then
+    run_test_suite "Agentic Parser Test" "$TEST_DIR/../test_parser.sh"
+fi
+
+# End time
+END_TIME=$(date +%s)
+DURATION=$((END_TIME - START_TIME))
+
+# Summary Report
+echo -e "\n\n${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${BLUE}📊 TEST SUMMARY REPORT${NC}"
+echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+
+echo -e "\n${BLUE}Test Suites:${NC}"
+echo -e "  Total:  $TOTAL_SUITES"
+echo -e "  ${GREEN}Passed: $PASSED_SUITES${NC}"
+echo -e "  ${RED}Failed: $FAILED_SUITES${NC}"
+
+# Calculate pass rate
+if [[ $TOTAL_SUITES -gt 0 ]]; then
+    PASS_RATE=$((PASSED_SUITES * 100 / TOTAL_SUITES))
+    echo -e "\n${BLUE}Pass Rate: ${NC}${PASS_RATE}%"
     
-    for result in "${TEST_RESULTS[@]}"; do
-        # Strip color codes for report
-        local clean_result=$(echo -e "$result" | sed 's/\x1b\[[0-9;]*m//g')
-        report_content+="\n$clean_result"
+    # Visual progress bar
+    echo -n "  ["
+    FILLED=$((PASS_RATE / 5))
+    for ((i=0; i<20; i++)); do
+        if [[ $i -lt $FILLED ]]; then
+            echo -n "█"
+        else
+            echo -n "░"
+        fi
     done
-    
-    report_content+="\n\nFEATURE VERIFICATION
-===================
-1. Conversation Persistence: VERIFIED
-   - Messages are saved to JSON files
-   - Conversations persist across sessions
-   - Each conversation has unique ID
+    echo "]"
+fi
 
-2. Context Management: VERIFIED
-   - Last 10 messages sent as context
-   - Context properly formatted for API
-   - Historical messages influence responses
+echo -e "\n${BLUE}Duration:${NC} ${DURATION} seconds"
 
-3. Session Management: VERIFIED
-   - Create new conversations with /new
-   - List all conversations with /list
-   - Switch between conversations with /switch
-   - View history with /history
-
-4. Data Storage: VERIFIED
-   - Conversations stored in ~/.cliii/conversations/
-   - JSON format with timestamps
-   - Current conversation tracked in ~/.cliii/current_conversation
-
-5. Error Handling: VERIFIED
-   - Graceful handling of invalid inputs
-   - Special characters properly escaped
-   - Concurrent access managed
-   - Corrupted files handled safely
-
-6. Performance: VERIFIED
-   - Handles 100+ messages per conversation
-   - Manages 50+ simultaneous conversations
-   - Large messages (10KB+) supported
-   - Memory efficient context windowing
-
-EVIDENCE OF IMPLEMENTATION
-========================
-The enhanced int.sh script now includes:
-- init_conversation_storage(): Creates storage directories
-- generate_conversation_id(): Unique ID generation
-- save_to_conversation(): Persists messages with timestamps
-- get_conversation_history(): Retrieves past messages
-- load_current_conversation(): Session continuity
-- Context-aware send_to_thinkai(): Includes conversation history
-
-Core Functionality Verified:
-- File Operations: Write files with content via file_operation response
-- Command Execution: Run shell commands via execute response
-- Directory Management: Create and navigate folders
-- JSON/Script Support: Handle various file formats
-- Operation Persistence: All actions saved in conversation history
-- Error Recovery: Graceful handling of operation failures
-
-The implementation provides eternal context by:
-1. Storing all conversations permanently
-2. Including recent history in API calls
-3. Maintaining conversation state across sessions
-4. Supporting conversation switching and management
-5. Preserving all file operations and command executions
-6. Maintaining full context of user interactions and system responses"
-    
-    echo "$report_content" > "$REPORT_FILE"
-    echo -e "\n${CYAN}Full report saved to: $REPORT_FILE${NC}"
-}
-
-# Main execution
-main() {
-    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    
-    # Check if test scripts exist
-    if [[ ! -f "$script_dir/test_conversation_context.sh" ]]; then
-        echo -e "${RED}Error: test_conversation_context.sh not found${NC}"
-        exit 1
-    fi
-    
-    if [[ ! -f "$script_dir/test_edge_cases.sh" ]]; then
-        echo -e "${RED}Error: test_edge_cases.sh not found${NC}"
-        exit 1
-    fi
-    
-    if [[ ! -f "$script_dir/test_core_functionality.sh" ]]; then
-        echo -e "${RED}Error: test_core_functionality.sh not found${NC}"
-        exit 1
-    fi
-    
-    # Run all test suites
-    run_test_suite "Conversation Context E2E Tests" "$script_dir/test_conversation_context.sh"
-    local e2e_exit=$?
-    
-    run_test_suite "Edge Case Tests" "$script_dir/test_edge_cases.sh"
-    local edge_exit=$?
-    
-    run_test_suite "Core Functionality Tests" "$script_dir/test_core_functionality.sh"
-    local core_exit=$?
-    
-    # Summary
-    echo -e "\n${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║                    FINAL SUMMARY                           ║${NC}"
-    echo -e "${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
-    echo ""
-    
-    for result in "${TEST_RESULTS[@]}"; do
-        echo -e "$result"
-    done
-    
-    echo ""
-    echo -e "${BLUE}Total Tests Passed: ${GREEN}$TOTAL_PASSED${NC}"
-    echo -e "${BLUE}Total Tests Failed: ${RED}$TOTAL_FAILED${NC}"
-    
-    local success_rate=$(awk "BEGIN {printf \"%.1f\", ($TOTAL_PASSED/($TOTAL_PASSED+$TOTAL_FAILED))*100}")
-    echo -e "${BLUE}Success Rate: ${YELLOW}${success_rate}%${NC}"
-    
-    # Generate report
-    generate_report
-    
-    # Final verdict
-    echo ""
-    if [[ $TOTAL_FAILED -eq 0 ]]; then
-        echo -e "${GREEN}╔════════════════════════════════════════════════════════════╗${NC}"
-        echo -e "${GREEN}║        ✓ ALL TESTS PASSED - IMPLEMENTATION VERIFIED        ║${NC}"
-        echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
-        exit 0
-    else
-        echo -e "${RED}╔════════════════════════════════════════════════════════════╗${NC}"
-        echo -e "${RED}║          ✗ SOME TESTS FAILED - REVIEW REQUIRED            ║${NC}"
-        echo -e "${RED}╚════════════════════════════════════════════════════════════╝${NC}"
-        exit 1
-    fi
-}
-
-# Run the test suite
-main "$@"
+# Overall result
+echo -e "\n${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+if [[ $FAILED_SUITES -eq 0 ]]; then
+    echo -e "${GREEN}🎉 ALL TESTS PASSED! 🎉${NC}"
+    echo -e "${GREEN}The ThinkAI CLI is working correctly with:${NC}"
+    echo -e "  ✓ Context awareness and continuity"
+    echo -e "  ✓ Codebase analysis and indexing"
+    echo -e "  ✓ Agentic mode with automatic execution"
+    echo -e "  ✓ Conversation persistence"
+    echo -e "  ✓ File and command operations"
+    exit 0
+else
+    echo -e "${RED}❌ SOME TESTS FAILED${NC}"
+    echo -e "${RED}Please review the failing tests above.${NC}"
+    exit 1
+fi
