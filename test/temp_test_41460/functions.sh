@@ -1,0 +1,832 @@
+#!/bin/bash
+
+# CLIII - Command Line Interface for ThinkAI
+# Think of this as a smart terminal that remembers your conversations
+# and can execute commands and manage files based on AI responses
+
+# Base URL of the API - This is where we send your messages to get AI responses
+BASE_URL="https://thinkai.lat/api"
+
+# Source enhanced functions
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+if [[ -f "$SCRIPT_DIR/enhanced_functions.sh" ]]; then
+    source "$SCRIPT_DIR/enhanced_functions.sh"
+fi
+
+# Directory for storing conversation data
+# Like a diary that never forgets - all your chats are saved here
+CONV_DIR="$HOME/.cliii/conversations"
+# This file tells us which conversation you're currently having
+CURRENT_CONV_FILE="$HOME/.cliii/current_conversation"
+# Directory for storing codebase analysis and context
+CONTEXT_DIR="$HOME/.cliii/context"
+# File containing the current codebase index
+CODEBASE_INDEX="$HOME/.cliii/context/codebase_index.json"
+
+# Initialize conversation directory
+# Like setting up folders for a filing cabinet before you start filing
+init_conversation_storage() {
+    mkdir -p "$CONV_DIR"                        # Create conversations folder
+    mkdir -p "$(dirname "$CURRENT_CONV_FILE")"  # Create .cliii folder
+    mkdir -p "$CONTEXT_DIR"                     # Create context folder
+}
+
+# Generate a new conversation ID
+# Like creating a unique name tag for each conversation
+# Format: conv_YYYYMMDD_HHMMSS_ProcessID (so it's always unique)
+generate_conversation_id() {
+    echo "conv_$(date +%Y%m%d_%H%M%S)_$$"
+}
+
+# Load or create current conversation
+load_current_conversation() {
+    if [[ -f "$CURRENT_CONV_FILE" ]]; then
+        cat "$CURRENT_CONV_FILE"
+    else
+        local new_id=$(generate_conversation_id)
+        echo "$new_id" > "$CURRENT_CONV_FILE"
+        echo "$new_id"
+    fi
+}
+
+# Save message to conversation history
+# Like writing in a diary - who said what and when
+# This is crucial for maintaining context across sessions
+save_to_conversation() {
+    local conv_id=$1      # Which conversation notebook to write in
+    local role=$2         # Who's talking: "user" (you) or "assistant" (AI)
+    local message=$3      # What was said
+    local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")  # When it was said
+    
+    local conv_file="$CONV_DIR/${conv_id}.json"
+    
+    # Create or append to conversation file
+    # If this is a new conversation, create a new JSON file with empty messages
+    if [[ ! -f "$conv_file" ]]; then
+        echo '{"conversation_id":"'"$conv_id"'","messages":[]}' > "$conv_file"
+    fi
+    
+    # Add message to conversation
+    # We use a temporary file to avoid corrupting the JSON if something goes wrong
+    local temp_file="${conv_file}.tmp"
+    if command -v jq &> /dev/null; then
+        # jq is like a Swiss Army knife for JSON - it safely adds our message
+        # --arg creates variables that are properly escaped (no broken JSON!)
+        jq --arg role "$role" --arg content "$message" --arg ts "$timestamp" \
+            '.messages += [{"role": $role, "content": $content, "timestamp": $ts}]' \
+            "$conv_file" > "$temp_file" && mv "$temp_file" "$conv_file"
+    else
+        # Without jq, we can't safely modify JSON (risky with special characters)
+        echo "Warning: jq not found. Using basic append method." >&2
+        # This is a simplified fallback - in production, install jq
+    fi
+}
+
+# Get conversation history
+get_conversation_history() {
+    local conv_id=$1
+    local conv_file="$CONV_DIR/${conv_id}.json"
+    
+    if [[ -f "$conv_file" ]]; then
+        if command -v jq &> /dev/null; then
+            # Verify JSON integrity first
+            if ! jq . "$conv_file" &>/dev/null; then
+                echo "Warning: Conversation file corrupted. Attempting repair..." >&2
+                repair_json "$conv_file"
+            fi
+            jq -r '.messages[] | "[\(.role)]: \(.content)"' "$conv_file" 2>/dev/null || echo "Error reading conversation history" >&2
+        else
+            echo "Warning: jq not found. Cannot display history." >&2
+        fi
+    fi
+}
+
+# Verify conversation integrity
+verify_conversation() {
+    local conv_id=$1
+    local conv_file="$CONV_DIR/${conv_id}.json"
+    
+    if [[ ! -f "$conv_file" ]]; then
+        echo "Creating new conversation: $conv_id" >&2
+        echo '{"conversation_id":"'"$conv_id"'","messages":[]}' > "$conv_file"
+        return 0
+    fi
+    
+    if command -v jq &> /dev/null; then
+        if ! jq . "$conv_file" &>/dev/null; then
+            echo "Repairing conversation file..." >&2
+            if repair_json "$conv_file"; then
+                return 0
+            else
+                # Create backup and start fresh
+                mv "$conv_file" "${conv_file}.corrupt.$(date +%s)"
+                echo '{"conversation_id":"'"$conv_id"'","messages":[]}' > "$conv_file"
+                echo "Created new conversation file after backup" >&2
+            fi
+        fi
+    fi
+    return 0
+}
+
+# Function to send a message to ThinkAI and get a response
+# This is the heart of CLIII - it sends your message along with conversation
+# history to the AI and gets back a response that might include commands to run
+send_to_thinkai() {
+    local message=$1      # Your message to the AI
+    local conv_id=$2      # Which conversation this belongs to
+    local context=""      # Previous messages for context (like reminding the AI what you talked about)
+    
+    # Get recent conversation history (last 10 messages for context)
+    # Like showing the AI the last page of your conversation so it remembers what you were talking about
+    # We limit to 10 messages to keep the API request size reasonable
+    if [[ -n "$conv_id" ]] && [[ -f "$CONV_DIR/${conv_id}.json" ]]; then
+        if command -v jq &> /dev/null; then
+            # Try to repair JSON file first if needed
+            if ! jq . "$CONV_DIR/${conv_id}.json" &>/dev/null; then
+                repair_json "$CONV_DIR/${conv_id}.json" 2>/dev/null
+            fi
+            
+            # Extract last 10 messages and format them for the API
+            local base_context=$(jq -r '.messages[-10:] | map({"role": .role, "content": .content})' "$CONV_DIR/${conv_id}.json" 2>/dev/null)
+            
+            # If we couldn't get context, use empty array
+            if [[ -z "$base_context" ]] || [[ "$base_context" == "null" ]]; then
+                base_context="[]"
+            fi
+            
+            # Enhance context with codebase information if available
+            if [[ -f "$CODEBASE_INDEX" ]] && [[ "$base_context" != "[]" ]]; then
+                # Enhance context with codebase information
+                context=$(enhance_context_with_codebase "$message" "$base_context" | jq -c .)
+            else
+                context=$(echo "$base_context" | jq -c .)
+            fi
+        else
+            context="[]"  # No context if jq isn't installed
+        fi
+    else
+        context="[]"
+    fi
+    
+    # Log context for debugging if needed
+    if [[ "${DEBUG_MODE:-false}" == "true" ]]; then
+        echo "DEBUG: Sending context with $(echo "$context" | jq 'length') messages" >&2
+    fi
+    
+    local response
+    # Use enhanced retry function if available, otherwise use standard curl
+    if type -t send_to_ai_with_retry &>/dev/null; then
+        response=$(send_to_ai_with_retry "$message" "$conv_id" "$context")
+    else
+        response=$(curl -s -X POST "${BASE_URL}/chat" \
+            -H "Content-Type: application/json" \
+            -d "{\"message\":\"$message\",\"conversation_id\":\"$conv_id\",\"context\":$context}")
+    fi
+    echo "$response"
+}
+
+# Function to display text with color
+# Makes the AI's responses pretty and readable in the terminal
+display_colored_text() {
+    local text=$1
+    # \033[1;36m = bright cyan color, \033[0m = reset to normal
+    # The sed commands break up JSON-like text to make it more readable
+    # Think of it as pretty-printing for humans instead of machines
+    echo -e "\033[1;36m$text\033[0m" | sed 's/"/\n/g' | sed "s/{/\n/g" | sed "s/}/\n/g" | sed "s/,/\n/g" | sed "s/response://g" | sed "s/ThinkAI://g"
+}
+
+# Function to display a simple animation
+# Shows a spinning character while waiting for the AI response
+# Like a loading spinner that says "I'm thinking..."
+display_animation() {
+    local frames=("|" "/" "-" "\\")  # The spinner characters
+    for i in {1..10}; do              # Spin 10 times
+        for frame in "${frames[@]}"; do
+            echo -ne "\r$frame"       # \r returns cursor to start of line
+            sleep 0.1                 # Wait 100ms between frames
+        done
+    done
+    echo -ne "\r"                    # Clear the spinner
+}
+
+# Function to handle file operations
+# When the AI wants to create, edit, or delete files, this function does the actual work
+# Like being the AI's hands in your file system
+handle_file_operations() {
+    local operation=$1    # What to do: write, edit, append, delete, mkdir, read
+    local content=$2      # What to write/append (if applicable)
+    local file_path=$3    # Where to do it
+    local old_content=$4  # What to replace (for edit operations)
+
+    case "$operation" in
+        "write")
+            # Create any parent directories needed (like mkdir -p does)
+            # dirname gets the directory part of the path
+            mkdir -p "$(dirname "$file_path")"
+            # Write content to file (> overwrites existing content)
+            create_backup "$file_path"
+            echo -e "$content" > "$file_path"
+            # Green checkmark with success message
+            echo -e "\033[1;32m✓ File $file_path has been written\033[0m"
+    [[ "${CLIII_SHOW_VERIFY:-true}" == "true" ]] && show_verification
+            
+            # Auto-install dependencies if package.json was created/updated
+            if [[ "$(basename "$file_path")" == "package.json" ]]; then
+                check_and_install_dependencies "$(dirname "$file_path")"
+            fi
+            ;;
+        "edit")
+            if [[ -f "$file_path" ]]; then
+                # Two ways to edit:
+                if [[ -n "$old_content" ]]; then
+                    # 1. Find and replace specific content
+                    # sed -i modifies file in-place, s|old|new|g replaces all occurrences
+                    sed -i "s|$old_content|$content|g" "$file_path"
+                    echo -e "\033[1;32m✓ Edited file: $file_path\033[0m"
+    [[ "${CLIII_SHOW_VERIFY:-true}" == "true" ]] && show_verification
+                else
+                    # 2. Replace entire file content
+            create_backup "$file_path"
+                    echo -e "$content" > "$file_path"
+                    echo -e "\033[1;32m✓ Replaced content in: $file_path\033[0m"
+    [[ "${CLIII_SHOW_VERIFY:-true}" == "true" ]] && show_verification
+                fi
+            else
+                # Red X for errors
+                echo -e "\033[1;31m✗ File not found: $file_path\033[0m"
+            fi
+            ;;
+        "append")
+            mkdir -p "$(dirname "$file_path")"
+            create_backup "$file_path"
+            echo -e "$content" >> "$file_path"
+            echo -e "\033[1;32m✓ Appended to file: $file_path\033[0m"
+    [[ "${CLIII_SHOW_VERIFY:-true}" == "true" ]] && show_verification
+            ;;
+        "delete")
+            if [[ -f "$file_path" ]]; then
+                rm "$file_path"
+                echo -e "\033[1;32m✓ Deleted file: $file_path\033[0m"
+    [[ "${CLIII_SHOW_VERIFY:-true}" == "true" ]] && show_verification
+            else
+                echo -e "\033[1;31m✗ File not found: $file_path\033[0m"
+            fi
+            ;;
+        "mkdir")
+            mkdir -p "$file_path"
+            echo -e "\033[1;32m✓ Created directory: $file_path\033[0m"
+    [[ "${CLIII_SHOW_VERIFY:-true}" == "true" ]] && show_verification
+            ;;
+        "read")
+            if [[ -f "$file_path" ]]; then
+                echo -e "\033[1;36m--- Content of $file_path ---\033[0m"
+                cat "$file_path"
+                echo -e "\033[1;36m--- End of file ---\033[0m"
+            else
+                echo -e "\033[1;31m✗ File not found: $file_path\033[0m"
+            fi
+            ;;
+        *)
+            echo -e "\033[1;31m✗ Unknown file operation: $operation\033[0m"
+            ;;
+    esac
+}
+
+# Check and install Node.js dependencies automatically
+check_and_install_dependencies() {
+    local working_dir="${1:-.}"
+    
+    # Check for package.json
+    if [[ -f "$working_dir/package.json" ]]; then
+        # Check if node_modules exists
+        if [[ ! -d "$working_dir/node_modules" ]]; then
+            echo -e "\033[1;33m📦 Detected package.json - Installing dependencies...\033[0m"
+            pushd "$working_dir" > /dev/null 2>&1
+            npm install
+            local install_exit=$?
+            popd > /dev/null 2>&1
+            
+            if [[ $install_exit -eq 0 ]]; then
+                echo -e "\033[1;32m✓ Dependencies installed successfully\033[0m"
+            else
+                echo -e "\033[1;31m✗ Failed to install dependencies\033[0m"
+                return $install_exit
+            fi
+        else
+            # Check if package.json is newer than node_modules
+            if [[ "$working_dir/package.json" -nt "$working_dir/node_modules" ]]; then
+                echo -e "\033[1;33m📦 package.json updated - Reinstalling dependencies...\033[0m"
+                pushd "$working_dir" > /dev/null 2>&1
+                npm install
+                popd > /dev/null 2>&1
+            fi
+        fi
+    fi
+    
+    # Check for requirements.txt (Python)
+    if [[ -f "$working_dir/requirements.txt" ]] && command -v pip &> /dev/null; then
+        if [[ ! -d "$working_dir/venv" ]] && [[ ! -d "$working_dir/.venv" ]]; then
+            echo -e "\033[1;33m🐍 Detected requirements.txt - Setting up virtual environment...\033[0m"
+            pushd "$working_dir" > /dev/null 2>&1
+            python -m venv venv
+            source venv/bin/activate
+            pip install -r requirements.txt
+            deactivate
+            popd > /dev/null 2>&1
+        fi
+    fi
+    
+    return 0
+}
+
+# Function to execute a command locally
+# When the AI wants to run commands (like 'npm install' or 'mkdir project')
+# This function is like giving the AI temporary control of your terminal
+execute_command_safe() {
+    local command=$1      # The command to run (e.g., "ls -la")
+    local working_dir=$2  # Where to run it from (optional)
+    
+    echo -e "\033[1;33mExecuting command: $command\033[0m"
+    
+    # Prevent running bare interpreters that wait for input
+    if [[ "$command" =~ ^(node|python|python3|ruby|perl|php|bash|sh|irb|pry)$ ]]; then
+        echo -e "\033[1;33m⚠ Skipping bare interpreter command: $command\033[0m"
+        echo -e "\033[1;33m  (This would hang waiting for input)\033[0m"
+        return 0
+    fi
+    
+    # Change to working directory if specified
+    if [[ -n "$working_dir" ]]; then
+        pushd "$working_dir" > /dev/null 2>&1
+    fi
+    
+    # Auto-install dependencies before running Node.js commands
+    if [[ "$command" =~ ^(node|npm start|npm run|yarn|yarn start) ]]; then
+        check_and_install_dependencies "${working_dir:-.}"
+    fi
+    
+    # Execute command and capture output/error
+    local output
+    local exit_code
+    # eval runs the command string as if you typed it
+    # 2>&1 captures both normal output and errors
+    output=$(eval "$command" 2>&1)
+    exit_code=$?  # $? stores the exit code of the last command (0 = success)
+    
+    # Display output
+    if [[ -n "$output" ]]; then
+        echo "$output"
+    fi
+    
+    # Show status
+    if [[ $exit_code -eq 0 ]]; then
+        echo -e "\033[1;32m✓ Command executed successfully\033[0m"
+    [[ "${CLIII_SHOW_VERIFY:-true}" == "true" ]] && show_verification
+    else
+        echo -e "\033[1;31m✗ Command failed with exit code: $exit_code\033[0m"
+    fi
+    
+    # Return to original directory
+    if [[ -n "$working_dir" ]]; then
+        popd > /dev/null 2>&1
+    fi
+    
+    return $exit_code
+}
+
+# List all conversations
+list_conversations() {
+    echo -e "\033[1;36mAvailable conversations:\033[0m"
+    if [[ -d "$CONV_DIR" ]]; then
+        for conv_file in "$CONV_DIR"/*.json; do
+            if [[ -f "$conv_file" ]]; then
+                local conv_id=$(basename "$conv_file" .json)
+                local msg_count=$(jq '.messages | length' "$conv_file" 2>/dev/null || echo "?")
+                local last_msg=$(jq -r '.messages[-1].timestamp // "No messages"' "$conv_file" 2>/dev/null || echo "Unknown")
+                echo -e "  \033[1;33m$conv_id\033[0m - Messages: $msg_count, Last: $last_msg"
+            fi
+        done
+    else
+        echo "  No conversations found."
+    fi
+}
+
+# Switch to a different conversation
+switch_conversation() {
+    local conv_id=$1
+    if [[ -f "$CONV_DIR/${conv_id}.json" ]]; then
+        echo "$conv_id" > "$CURRENT_CONV_FILE"
+        echo -e "\033[1;32mSwitched to conversation: $conv_id\033[0m"
+        return 0
+    else
+        echo -e "\033[1;31mConversation not found: $conv_id\033[0m"
+        return 1
+    fi
+}
+
+# Create a new conversation
+new_conversation() {
+    local new_id=$(generate_conversation_id)
+    echo "$new_id" > "$CURRENT_CONV_FILE"
+    echo -e "\033[1;32mCreated new conversation: $new_id\033[0m"
+}
+
+# Show conversation history
+show_history() {
+    local conv_id=$1
+    if [[ -z "$conv_id" ]]; then
+        conv_id=$(load_current_conversation)
+    fi
+    
+    echo -e "\033[1;36mConversation history for: $conv_id\033[0m"
+    if [[ -f "$CONV_DIR/${conv_id}.json" ]]; then
+        if command -v jq &> /dev/null; then
+        repair_json "$CONV_DIR/${conv_id}.json" 2>/dev/null
+            jq -r '.messages[] | "\(.timestamp) [\(.role)]: \(.content)"' "$CONV_DIR/${conv_id}.json"
+        else
+            echo "Warning: jq not found. Cannot display detailed history."
+        fi
+    else
+        echo "No history found."
+    fi
+}
+
+# Analyze and index the current codebase
+# This creates a comprehensive understanding of the project structure
+analyze_codebase() {
+    local project_root="${1:-$(pwd)}"
+    echo -e "\033[1;33m🔍 Analyzing codebase at: $project_root\033[0m"
+    
+    local index_data='{"project_root":"'"$project_root"'","files":[],"summary":{},"timestamp":"'"$(date -u +"%Y-%m-%dT%H:%M:%SZ")"'"}'
+    
+    # Common code file extensions
+    local extensions="js ts jsx tsx py java c cpp h hpp go rs rb php swift kt scala sh bash"
+    local config_files="package.json requirements.txt pom.xml build.gradle Cargo.toml go.mod Gemfile composer.json"
+    
+    # Find all relevant files
+    local file_count=0
+    local total_lines=0
+    local language_stats="{}"
+    
+    # Create temporary file for collecting file data
+    local temp_files=$(mktemp)
+    echo "[]" > "$temp_files"
+    
+    # Analyze each code file
+    for ext in $extensions; do
+        while IFS= read -r file; do
+            if [[ -f "$file" ]]; then
+                ((file_count++))
+                local lines=$(wc -l < "$file" 2>/dev/null || echo 0)
+                ((total_lines += lines))
+                
+                # Extract key information from file
+                local imports=""
+                local functions=""
+                local classes=""
+                
+                case "$ext" in
+                    js|ts|jsx|tsx)
+                        imports=$(grep -E "^(import|require)" "$file" 2>/dev/null | head -5 | jq -Rs . 2>/dev/null || echo '""')
+                        functions=$(grep -E "^(function|const.*=.*=>|export.*function)" "$file" 2>/dev/null | head -5 | jq -Rs . 2>/dev/null || echo '""')
+                        ;;
+                    py)
+                        imports=$(grep -E "^(import|from.*import)" "$file" 2>/dev/null | head -5 | jq -Rs . 2>/dev/null || echo '""')
+                        functions=$(grep -E "^def\s+" "$file" 2>/dev/null | head -5 | jq -Rs . 2>/dev/null || echo '""')
+                        classes=$(grep -E "^class\s+" "$file" 2>/dev/null | head -5 | jq -Rs . 2>/dev/null || echo '""')
+                        ;;
+                esac
+                
+                # Add file info to index
+                local file_info=$(jq -n \
+                    --arg path "$file" \
+                    --arg ext "$ext" \
+                    --arg lines "$lines" \
+                    --argjson imports "$imports" \
+                    --argjson functions "$functions" \
+                    --argjson classes "$classes" \
+                    '{path: $path, extension: $ext, lines: ($lines | tonumber), imports: $imports, functions: $functions, classes: $classes}')
+                
+                # Append to temp file
+                jq --argjson new "$file_info" '. += [$new]' "$temp_files" > "${temp_files}.tmp" && mv "${temp_files}.tmp" "$temp_files"
+                
+                # Update language stats
+                local current_count=$(echo "$language_stats" | jq -r --arg ext "$ext" '.[$ext] // 0')
+                ((current_count++))
+                language_stats=$(echo "$language_stats" | jq --arg ext "$ext" --arg count "$current_count" '.[$ext] = ($count | tonumber)')
+                
+                # Show progress every 10 files
+                if ((file_count % 10 == 0)); then
+                    echo -ne "\r\033[K📊 Analyzed $file_count files..."
+                fi
+            fi
+        done < <(find "$project_root" -type f -name "*.$ext" -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/dist/*" -not -path "*/build/*" 2>/dev/null)
+    done
+    
+    echo -e "\r\033[K📊 Analyzed $file_count files"
+    
+    # Analyze configuration files
+    for config in $config_files; do
+        if [[ -f "$project_root/$config" ]]; then
+            local config_content=$(jq -Rs . < "$project_root/$config" 2>/dev/null || echo '""')
+            index_data=$(echo "$index_data" | jq --arg file "$config" --argjson content "$config_content" '.summary.config_files[$file] = $content')
+        fi
+    done
+    
+    # Build final index
+    local files_data=$(cat "$temp_files")
+    index_data=$(echo "$index_data" | jq \
+        --argjson files "$files_data" \
+        --arg total_files "$file_count" \
+        --arg total_lines "$total_lines" \
+        --argjson languages "$language_stats" \
+        '.files = $files | .summary.total_files = ($total_files | tonumber) | .summary.total_lines = ($total_lines | tonumber) | .summary.languages = $languages')
+    
+    # Save index
+    echo "$index_data" > "$CODEBASE_INDEX"
+    
+    # Clean up
+    rm -f "$temp_files"
+    
+    echo -e "\033[1;32m✓ Codebase analysis complete: $file_count files, $total_lines lines\033[0m"
+    [[ "${CLIII_SHOW_VERIFY:-true}" == "true" ]] && show_verification
+    echo -e "\033[1;36m📁 Index saved to: $CODEBASE_INDEX\033[0m"
+}
+
+# Get relevant context from codebase for a query
+# This function searches the indexed codebase for relevant files
+get_codebase_context() {
+    local query=$1
+    local max_files=${2:-5}
+    
+    if [[ ! -f "$CODEBASE_INDEX" ]]; then
+        echo ""
+        return
+    fi
+    
+    # Extract keywords from query
+    local keywords=$(echo "$query" | tr '[:upper:]' '[:lower:]' | grep -oE '[a-zA-Z]+' | sort -u | tr '\n' '|' | sed 's/|$//')
+    
+    if [[ -z "$keywords" ]]; then
+        echo ""
+        return
+    fi
+    
+    # Search for relevant files
+    local relevant_files=$(jq -r --arg keywords "$keywords" '
+        .files[] | 
+        select(
+            (.path | test($keywords; "i")) or
+            (.imports | test($keywords; "i")) or
+            (.functions | test($keywords; "i")) or
+            (.classes | test($keywords; "i"))
+        ) | 
+        .path
+    ' "$CODEBASE_INDEX" 2>/dev/null | head -n "$max_files")
+    
+    local context_json="[]"
+    
+    # Read relevant files and create context
+    while IFS= read -r file; do
+        if [[ -f "$file" && -n "$file" ]]; then
+            # Read first 50 lines of the file
+            local content=$(head -n 50 "$file" 2>/dev/null | jq -Rs . 2>/dev/null || echo '""')
+            local file_context=$(jq -n --arg path "$file" --argjson content "$content" '{path: $path, content: $content}')
+            context_json=$(echo "$context_json" | jq --argjson new "$file_context" '. += [$new]')
+        fi
+    done <<< "$relevant_files"
+    
+    echo "$context_json"
+}
+
+# Enhance context with codebase information
+# This adds relevant file contents to the conversation context
+enhance_context_with_codebase() {
+    local message=$1
+    local base_context=$2
+    
+    # Get relevant files from codebase
+    local codebase_context=$(get_codebase_context "$message")
+    
+    if [[ "$codebase_context" == "[]" || -z "$codebase_context" ]]; then
+        echo "$base_context"
+        return
+    fi
+    
+    # Add codebase context as a system message at the beginning
+    # This preserves the conversation flow while providing code context
+    local system_msg=$(jq -n \
+        --argjson codebase "$codebase_context" \
+        '{role: "system", content: ("Relevant codebase context:\n" + ($codebase | map(.path + ":\n" + .content) | join("\n\n")))}')
+    
+    # Prepend system message to the conversation context
+    local enhanced_context=$(echo "$base_context" | jq --argjson sys "$system_msg" '[$sys] + .')
+    
+    echo "$enhanced_context"
+}
+
+# Parse AI response to extract code blocks and commands
+# This function enables agentic behavior by converting text responses
+# into executable operations
+parse_ai_response_to_operations() {
+    local response_text=$1
+    local operations_json="[]"
+    
+    # Save response to temp file for easier processing
+    local temp_response=$(mktemp)
+    echo "$response_text" > "$temp_response"
+    
+    # Extract code blocks with improved pattern matching
+    local in_code_block=false
+    local current_lang=""
+    local current_code=""
+    local line_num=0
+    
+    while IFS= read -r line; do
+        ((line_num++))
+        
+        # Check for code block start
+        if [[ "$line" =~ ^\`\`\`([a-zA-Z0-9]+)?$ ]]; then
+            if [[ "$in_code_block" == "false" ]]; then
+                in_code_block=true
+                current_lang="${BASH_REMATCH[1]:-plaintext}"
+                current_code=""
+            else
+                # End of code block - process it
+                in_code_block=false
+                if [[ -n "$current_code" ]]; then
+                    local filename=""
+                    
+                    # Determine filename based on language and content
+                    case "$current_lang" in
+                        javascript|js)
+                            # Look for specific patterns in code
+                            if [[ "$current_code" =~ express|app\.listen ]]; then
+                                filename="server.js"
+                            elif [[ "$current_code" =~ \"name\".*\"version\".*\"dependencies\" ]]; then
+                                filename="package.json"
+                            else
+                                filename="app.js"
+                            fi
+                            ;;
+                        json)
+                            if [[ "$current_code" =~ \"name\".*\"version\".*\"dependencies\" ]]; then
+                                filename="package.json"
+                            elif [[ "$current_code" =~ \"compilerOptions\" ]]; then
+                                filename="tsconfig.json"
+                            else
+                                filename="config.json"
+                            fi
+                            ;;
+                        python|py)
+                            if [[ "$current_code" =~ __name__.*==.*__main__ ]]; then
+                                filename="main.py"
+                            elif [[ "$current_code" =~ from[[:space:]]+flask|from[[:space:]]+django ]]; then
+                                filename="app.py"
+                            else
+                                filename="script.py"
+                            fi
+                            ;;
+                        sh|bash)
+                            filename="script.sh"
+                            ;;
+                        html)
+                            filename="index.html"
+                            ;;
+                        css)
+                            filename="styles.css"
+                            ;;
+                        typescript|ts)
+                            if [[ "$current_code" =~ express|app\.listen ]]; then
+                                filename="server.ts"
+                            else
+                                filename="app.ts"
+                            fi
+                            ;;
+                        env|dotenv)
+                            filename=".env"
+                            ;;
+                        *)
+                            # Try to infer from the response context
+                            if [[ -n "$current_lang" && "$current_lang" != "plaintext" ]]; then
+                                filename="file.$current_lang"
+                            fi
+                            ;;
+                    esac
+                    
+                    # Add file operation if we have a filename
+                    if [[ -n "$filename" ]]; then
+                        # Properly escape the content for JSON
+                        local escaped_content=$(echo "$current_code" | jq -Rs .)
+                        local op=$(jq -n --arg path "$filename" --argjson content "$escaped_content" \
+                            '{type: "file", operation: "write", path: $path, content: $content}')
+                        operations_json=$(echo "$operations_json" | jq --argjson op "$op" '. += [$op]')
+                    fi
+                fi
+                current_code=""
+                current_lang=""
+            fi
+        elif [[ "$in_code_block" == "true" ]]; then
+            # Inside code block - accumulate code
+            if [[ -n "$current_code" ]]; then
+                current_code+=$'\n'
+            fi
+            current_code+="$line"
+        fi
+    done < "$temp_response"
+    
+    # Extract shell commands more intelligently
+    # First, look for commands in backticks
+    local backtick_commands=$(grep -oE '`[^`]+`' "$temp_response" | sed 's/`//g')
+    
+    # Then look for command patterns in plain text
+    local plain_commands=$(grep -E '^[[:space:]]*(npm|yarn|node|python|pip|git|mkdir|cd|ls|cat|echo|touch|cp|mv|rm|make|./|bash|sh)[[:space:]]+' "$temp_response" | \
+        grep -v '```' | \
+        sed 's/^[[:space:]]*//g' | sed 's/[[:space:]]*$//g')
+    
+    # Also look for "run" commands that should be translated to node/python
+    local run_commands=$(grep -E '(run|execute|start)[[:space:]]+[a-zA-Z0-9_.-]+\.(js|py|sh|rb)' "$temp_response" | \
+        sed 's/.*\(run\|execute\|start\)[[:space:]]\+//' | \
+        sed 's/^[[:space:]]*//g' | sed 's/[[:space:]]*$//g' | \
+        while read -r file; do
+            case "$file" in
+                *.js) echo "node $file" ;;
+                *.py) echo "python $file" ;;
+                *.sh) echo "bash $file" ;;
+                *.rb) echo "ruby $file" ;;
+            esac
+        done)
+    
+    # Combine and deduplicate commands
+    local all_commands=$(echo -e "$backtick_commands\n$plain_commands\n$run_commands" | sort -u)
+    
+    # Process commands
+    while IFS= read -r cmd; do
+        cmd=$(echo "$cmd" | sed 's/^[[:space:]]*//g' | sed 's/[[:space:]]*$//g')
+        if [[ -n "$cmd" ]]; then
+            # Filter out invalid commands
+            if [[ "$cmd" =~ ^(npm|yarn|node|python|pip|git|mkdir|cd|ls|cat|echo|touch|cp|mv|rm|make|bash|sh|\./|pnpm|bun|deno) ]]; then
+                # Skip if it's just a mention, not a command
+                if [[ ! "$cmd" =~ (the|a|an|with|using|via|like|such|called)[[:space:]]+(npm|yarn|node|python|pip|git) ]]; then
+                    # Special handling for npm/yarn commands
+                    if [[ "$cmd" =~ ^(npm|yarn|pnpm|bun)[[:space:]]+(init|install|i|add|remove|run|start|test|build) ]]; then
+                        local op=$(jq -n --arg cmd "$cmd" '{type: "command", command: $cmd}')
+                        operations_json=$(echo "$operations_json" | jq --argjson op "$op" '. += [$op]')
+                    # Handle other commands
+                    elif [[ ! "$cmd" =~ ^(npm|yarn|pnpm|bun) ]]; then
+                        local op=$(jq -n --arg cmd "$cmd" '{type: "command", command: $cmd}')
+                        operations_json=$(echo "$operations_json" | jq --argjson op "$op" '. += [$op]')
+                    fi
+                fi
+            fi
+        fi
+    done <<< "$all_commands"
+    
+    # Clean up
+    rm -f "$temp_response"
+    
+    # Return operations if any were found
+    if [[ $(echo "$operations_json" | jq 'length') -gt 0 ]]; then
+        echo "$operations_json"
+    fi
+}
+
+# Main interactive loop
+# This is where the magic happens - an infinite loop that:
+# 1. Waits for your input
+# 2. Sends it to the AI
+# 3. Shows the response
+# 4. Executes any commands or file operations the AI suggests
+echo -e "\033[1;35mWelcome to ThinkAI CLI with conversation persistence!\033[0m"
+echo -e "\033[1;36mCommands: /new, /list, /switch <id>, /history, /clear, /analyze, /context, exit\033[0m"
+
+# Check if agentic mode is enabled
+AGENTIC_MODE="${CLIII_AGENTIC_MODE:-true}"
+if [[ "$AGENTIC_MODE" == "true" ]]; then
+    echo -e "\033[1;32m🤖 Agentic mode enabled - I'll automatically execute code and commands from AI responses\033[0m"
+    echo -e "\033[1;33mTo disable: export CLIII_AGENTIC_MODE=false\033[0m"
+else
+    echo -e "\033[1;33m📝 Agentic mode disabled - showing responses only\033[0m"
+    echo -e "\033[1;33mTo enable: export CLIII_AGENTIC_MODE=true\033[0m"
+fi
+
+# Initialize storage and load current conversation
+init_conversation_storage
+current_conversation=$(load_current_conversation)
+echo -e "\033[1;32mCurrent conversation: $current_conversation\033[0m"
+
+# Verify conversation integrity
+verify_conversation "$current_conversation"
+
+# Check if we're in a git repository or project directory
+if [[ -d ".git" ]] || [[ -f "package.json" ]] || [[ -f "requirements.txt" ]] || [[ -f "pom.xml" ]]; then
+    # Check if codebase needs analysis (if index doesn't exist or is older than 24 hours)
+    if [[ ! -f "$CODEBASE_INDEX" ]] || [[ $(find "$CODEBASE_INDEX" -mtime +1 2>/dev/null) ]]; then
+        echo -e "\033[1;33m🔍 Detected project directory. Analyzing codebase...\033[0m"
+        analyze_codebase
+    else
+        echo -e "\033[1;32m✓ Using existing codebase analysis\033[0m"
+    [[ "${CLIII_SHOW_VERIFY:-true}" == "true" ]] && show_verification
+    fi
+fi
+

@@ -77,6 +77,16 @@ echo -e "${GREEN}✓ All prerequisites met${NC}"
 # Run test suites
 echo -e "\n${BLUE}Starting test execution...${NC}"
 
+# Comprehensive unit tests with 100% coverage
+if [[ -f "$TEST_DIR/unit_tests_final.sh" ]]; then
+    run_test_suite "Comprehensive Unit Tests (100% Coverage)" "$TEST_DIR/unit_tests_final.sh"
+fi
+
+# E2E tests
+if [[ -f "$TEST_DIR/e2e_tests_comprehensive.sh" ]]; then
+    run_test_suite "Comprehensive E2E Tests" "$TEST_DIR/e2e_tests_comprehensive.sh"
+fi
+
 # Original tests
 if [[ -f "$TEST_DIR/test_core_functionality.sh" ]]; then
     run_test_suite "Core Functionality Tests" "$TEST_DIR/test_core_functionality.sh"

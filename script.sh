@@ -1,1 +1,1 @@
-python3 main.py
+DEBUG='app' node app.js

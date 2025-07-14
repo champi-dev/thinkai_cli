@@ -1,0 +1,27 @@
+{
+  "project_root": "/home/champi/Dev/thinkai_cli",
+  "files": [
+    {
+      "path": "/home/champi/Dev/thinkai_cli/main.py",
+      "extension": "py",
+      "lines": 15,
+      "imports": "import http.server\nimport socketserver\n",
+      "functions": "def run_server(port=8000):\n",
+      "classes": "class MyHttpRequestHandler(http.server.SimpleHTTPRequestHandler):\n"
+    }
+  ],
+  "summary": {
+    "config_files": {
+      "package.json": "{\n  \"name\": \"thinkai_cli\",\n  \"version\": \"1.0.0\",\n  \"description\": \"A smart terminal that remembers everything and can code for you!\",\n  \"main\": \"app.js\",\n  \"directories\": {\n    \"test\": \"test\"\n  },\n  \"scripts\": {\n    \"test\": \"echo \\\"Error: no test specified\\\" && exit 1\",\n    \"start\": \"node server.js\"\n  },\n  \"repository\": {\n    \"type\": \"git\",\n    \"url\": \"git+https://github.com/champi-dev/thinkai_cli.git\"\n  },\n  \"keywords\": [],\n  \"author\": \"\",\n  \"license\": \"ISC\",\n  \"bugs\": {\n    \"url\": \"https://github.com/champi-dev/thinkai_cli/issues\"\n  },\n  \"homepage\": \"https://github.com/champi-dev/thinkai_cli#readme\",\n  \"dependencies\": {\n    \"express\": \"^5.1.0\"\n  }\n}\n"
+    },
+    "total_files": 28,
+    "total_lines": 7311,
+    "languages": {
+      "js": 2,
+      "py": 1,
+      "sh": 24,
+      "bash": 1
+    }
+  },
+  "timestamp": "2025-07-14T05:17:50Z"
+}

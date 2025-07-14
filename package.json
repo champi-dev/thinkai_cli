@@ -1,0 +1,27 @@
+{
+  "name": "thinkai_cli",
+  "version": "1.0.0",
+  "description": "A smart terminal that remembers everything and can code for you!",
+  "main": "app.js",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/champi-dev/thinkai_cli.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/champi-dev/thinkai_cli/issues"
+  },
+  "homepage": "https://github.com/champi-dev/thinkai_cli#readme",
+  "dependencies": {
+    "express": "^5.1.0"
+  }
+}

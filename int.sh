@@ -7,6 +7,12 @@
 # Base URL of the API - This is where we send your messages to get AI responses
 BASE_URL="https://thinkai.lat/api"
 
+# Source enhanced functions
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+if [[ -f "$SCRIPT_DIR/enhanced_functions.sh" ]]; then
+    source "$SCRIPT_DIR/enhanced_functions.sh"
+fi
+
 # Directory for storing conversation data
 # Like a diary that never forgets - all your chats are saved here
 CONV_DIR="$HOME/.cliii/conversations"
@@ -83,11 +89,43 @@ get_conversation_history() {
     
     if [[ -f "$conv_file" ]]; then
         if command -v jq &> /dev/null; then
-            jq -r '.messages[] | "[\(.role)]: \(.content)"' "$conv_file"
+            # Verify JSON integrity first
+            if ! jq . "$conv_file" &>/dev/null; then
+                echo "Warning: Conversation file corrupted. Attempting repair..." >&2
+                repair_json "$conv_file"
+            fi
+            jq -r '.messages[] | "[\(.role)]: \(.content)"' "$conv_file" 2>/dev/null || echo "Error reading conversation history" >&2
         else
             echo "Warning: jq not found. Cannot display history." >&2
         fi
     fi
+}
+
+# Verify conversation integrity
+verify_conversation() {
+    local conv_id=$1
+    local conv_file="$CONV_DIR/${conv_id}.json"
+    
+    if [[ ! -f "$conv_file" ]]; then
+        echo "Creating new conversation: $conv_id" >&2
+        echo '{"conversation_id":"'"$conv_id"'","messages":[]}' > "$conv_file"
+        return 0
+    fi
+    
+    if command -v jq &> /dev/null; then
+        if ! jq . "$conv_file" &>/dev/null; then
+            echo "Repairing conversation file..." >&2
+            if repair_json "$conv_file"; then
+                return 0
+            else
+                # Create backup and start fresh
+                mv "$conv_file" "${conv_file}.corrupt.$(date +%s)"
+                echo '{"conversation_id":"'"$conv_id"'","messages":[]}' > "$conv_file"
+                echo "Created new conversation file after backup" >&2
+            fi
+        fi
+    fi
+    return 0
 }
 
 # Function to send a message to ThinkAI and get a response
@@ -103,11 +141,22 @@ send_to_thinkai() {
     # We limit to 10 messages to keep the API request size reasonable
     if [[ -n "$conv_id" ]] && [[ -f "$CONV_DIR/${conv_id}.json" ]]; then
         if command -v jq &> /dev/null; then
+            # Try to repair JSON file first if needed
+            if ! jq . "$CONV_DIR/${conv_id}.json" &>/dev/null; then
+                repair_json "$CONV_DIR/${conv_id}.json" 2>/dev/null
+            fi
+            
             # Extract last 10 messages and format them for the API
-            local base_context=$(jq -r '.messages[-10:] | map({"role": .role, "content": .content})' "$CONV_DIR/${conv_id}.json" 2>/dev/null || echo "[]")
+            local base_context=$(jq -r '.messages[-10:] | map({"role": .role, "content": .content})' "$CONV_DIR/${conv_id}.json" 2>/dev/null)
+            
+            # If we couldn't get context, use empty array
+            if [[ -z "$base_context" ]] || [[ "$base_context" == "null" ]]; then
+                base_context="[]"
+            fi
             
             # Enhance context with codebase information if available
-            if [[ -f "$CODEBASE_INDEX" ]]; then
+            if [[ -f "$CODEBASE_INDEX" ]] && [[ "$base_context" != "[]" ]]; then
+                # Enhance context with codebase information
                 context=$(enhance_context_with_codebase "$message" "$base_context" | jq -c .)
             else
                 context=$(echo "$base_context" | jq -c .)
@@ -119,10 +168,20 @@ send_to_thinkai() {
         context="[]"
     fi
     
+    # Log context for debugging if needed
+    if [[ "${DEBUG_MODE:-false}" == "true" ]]; then
+        echo "DEBUG: Sending context with $(echo "$context" | jq 'length') messages" >&2
+    fi
+    
     local response
-    response=$(curl -s -X POST "${BASE_URL}/chat" \
-        -H "Content-Type: application/json" \
-        -d "{\"message\":\"$message\",\"conversation_id\":\"$conv_id\",\"context\":$context}")
+    # Use enhanced retry function if available, otherwise use standard curl
+    if type -t send_to_ai_with_retry &>/dev/null; then
+        response=$(send_to_ai_with_retry "$message" "$conv_id" "$context")
+    else
+        response=$(curl -s -X POST "${BASE_URL}/chat" \
+            -H "Content-Type: application/json" \
+            -d "{\"message\":\"$message\",\"conversation_id\":\"$conv_id\",\"context\":$context}")
+    fi
     echo "$response"
 }
 
@@ -165,9 +224,16 @@ handle_file_operations() {
             # dirname gets the directory part of the path
             mkdir -p "$(dirname "$file_path")"
             # Write content to file (> overwrites existing content)
+            create_backup "$file_path"
             echo -e "$content" > "$file_path"
             # Green checkmark with success message
             echo -e "\033[1;32m✓ File $file_path has been written\033[0m"
+    [[ "${CLIII_SHOW_VERIFY:-true}" == "true" ]] && show_verification
+            
+            # Auto-install dependencies if package.json was created/updated
+            if [[ "$(basename "$file_path")" == "package.json" ]]; then
+                check_and_install_dependencies "$(dirname "$file_path")"
+            fi
             ;;
         "edit")
             if [[ -f "$file_path" ]]; then
@@ -177,10 +243,13 @@ handle_file_operations() {
                     # sed -i modifies file in-place, s|old|new|g replaces all occurrences
                     sed -i "s|$old_content|$content|g" "$file_path"
                     echo -e "\033[1;32m✓ Edited file: $file_path\033[0m"
+    [[ "${CLIII_SHOW_VERIFY:-true}" == "true" ]] && show_verification
                 else
                     # 2. Replace entire file content
+            create_backup "$file_path"
                     echo -e "$content" > "$file_path"
                     echo -e "\033[1;32m✓ Replaced content in: $file_path\033[0m"
+    [[ "${CLIII_SHOW_VERIFY:-true}" == "true" ]] && show_verification
                 fi
             else
                 # Red X for errors
@@ -189,13 +258,16 @@ handle_file_operations() {
             ;;
         "append")
             mkdir -p "$(dirname "$file_path")"
+            create_backup "$file_path"
             echo -e "$content" >> "$file_path"
             echo -e "\033[1;32m✓ Appended to file: $file_path\033[0m"
+    [[ "${CLIII_SHOW_VERIFY:-true}" == "true" ]] && show_verification
             ;;
         "delete")
             if [[ -f "$file_path" ]]; then
                 rm "$file_path"
                 echo -e "\033[1;32m✓ Deleted file: $file_path\033[0m"
+    [[ "${CLIII_SHOW_VERIFY:-true}" == "true" ]] && show_verification
             else
                 echo -e "\033[1;31m✗ File not found: $file_path\033[0m"
             fi
@@ -203,6 +275,7 @@ handle_file_operations() {
         "mkdir")
             mkdir -p "$file_path"
             echo -e "\033[1;32m✓ Created directory: $file_path\033[0m"
+    [[ "${CLIII_SHOW_VERIFY:-true}" == "true" ]] && show_verification
             ;;
         "read")
             if [[ -f "$file_path" ]]; then
@@ -219,18 +292,77 @@ handle_file_operations() {
     esac
 }
 
+# Check and install Node.js dependencies automatically
+check_and_install_dependencies() {
+    local working_dir="${1:-.}"
+    
+    # Check for package.json
+    if [[ -f "$working_dir/package.json" ]]; then
+        # Check if node_modules exists
+        if [[ ! -d "$working_dir/node_modules" ]]; then
+            echo -e "\033[1;33m📦 Detected package.json - Installing dependencies...\033[0m"
+            pushd "$working_dir" > /dev/null 2>&1
+            npm install
+            local install_exit=$?
+            popd > /dev/null 2>&1
+            
+            if [[ $install_exit -eq 0 ]]; then
+                echo -e "\033[1;32m✓ Dependencies installed successfully\033[0m"
+            else
+                echo -e "\033[1;31m✗ Failed to install dependencies\033[0m"
+                return $install_exit
+            fi
+        else
+            # Check if package.json is newer than node_modules
+            if [[ "$working_dir/package.json" -nt "$working_dir/node_modules" ]]; then
+                echo -e "\033[1;33m📦 package.json updated - Reinstalling dependencies...\033[0m"
+                pushd "$working_dir" > /dev/null 2>&1
+                npm install
+                popd > /dev/null 2>&1
+            fi
+        fi
+    fi
+    
+    # Check for requirements.txt (Python)
+    if [[ -f "$working_dir/requirements.txt" ]] && command -v pip &> /dev/null; then
+        if [[ ! -d "$working_dir/venv" ]] && [[ ! -d "$working_dir/.venv" ]]; then
+            echo -e "\033[1;33m🐍 Detected requirements.txt - Setting up virtual environment...\033[0m"
+            pushd "$working_dir" > /dev/null 2>&1
+            python -m venv venv
+            source venv/bin/activate
+            pip install -r requirements.txt
+            deactivate
+            popd > /dev/null 2>&1
+        fi
+    fi
+    
+    return 0
+}
+
 # Function to execute a command locally
 # When the AI wants to run commands (like 'npm install' or 'mkdir project')
 # This function is like giving the AI temporary control of your terminal
-execute_command() {
+execute_command_safe() {
     local command=$1      # The command to run (e.g., "ls -la")
     local working_dir=$2  # Where to run it from (optional)
     
     echo -e "\033[1;33mExecuting command: $command\033[0m"
     
+    # Prevent running bare interpreters that wait for input
+    if [[ "$command" =~ ^(node|python|python3|ruby|perl|php|bash|sh|irb|pry)$ ]]; then
+        echo -e "\033[1;33m⚠ Skipping bare interpreter command: $command\033[0m"
+        echo -e "\033[1;33m  (This would hang waiting for input)\033[0m"
+        return 0
+    fi
+    
     # Change to working directory if specified
     if [[ -n "$working_dir" ]]; then
         pushd "$working_dir" > /dev/null 2>&1
+    fi
+    
+    # Auto-install dependencies before running Node.js commands
+    if [[ "$command" =~ ^(node|npm start|npm run|yarn|yarn start) ]]; then
+        check_and_install_dependencies "${working_dir:-.}"
     fi
     
     # Execute command and capture output/error
@@ -249,6 +381,7 @@ execute_command() {
     # Show status
     if [[ $exit_code -eq 0 ]]; then
         echo -e "\033[1;32m✓ Command executed successfully\033[0m"
+    [[ "${CLIII_SHOW_VERIFY:-true}" == "true" ]] && show_verification
     else
         echo -e "\033[1;31m✗ Command failed with exit code: $exit_code\033[0m"
     fi
@@ -308,6 +441,7 @@ show_history() {
     echo -e "\033[1;36mConversation history for: $conv_id\033[0m"
     if [[ -f "$CONV_DIR/${conv_id}.json" ]]; then
         if command -v jq &> /dev/null; then
+        repair_json "$CONV_DIR/${conv_id}.json" 2>/dev/null
             jq -r '.messages[] | "\(.timestamp) [\(.role)]: \(.content)"' "$CONV_DIR/${conv_id}.json"
         else
             echo "Warning: jq not found. Cannot display detailed history."
@@ -415,6 +549,7 @@ analyze_codebase() {
     rm -f "$temp_files"
     
     echo -e "\033[1;32m✓ Codebase analysis complete: $file_count files, $total_lines lines\033[0m"
+    [[ "${CLIII_SHOW_VERIFY:-true}" == "true" ]] && show_verification
     echo -e "\033[1;36m📁 Index saved to: $CODEBASE_INDEX\033[0m"
 }
 
@@ -478,11 +613,14 @@ enhance_context_with_codebase() {
         return
     fi
     
-    # Create enhanced context that includes codebase information
-    local enhanced_context=$(jq -n \
-        --argjson base "$base_context" \
+    # Add codebase context as a system message at the beginning
+    # This preserves the conversation flow while providing code context
+    local system_msg=$(jq -n \
         --argjson codebase "$codebase_context" \
-        '{messages: $base, codebase_context: $codebase}')
+        '{role: "system", content: ("Relevant codebase context:\n" + ($codebase | map(.path + ":\n" + .content) | join("\n\n")))}')
+    
+    # Prepend system message to the conversation context
+    local enhanced_context=$(echo "$base_context" | jq --argjson sys "$system_msg" '[$sys] + .')
     
     echo "$enhanced_context"
 }
@@ -606,8 +744,21 @@ parse_ai_response_to_operations() {
         grep -v '```' | \
         sed 's/^[[:space:]]*//g' | sed 's/[[:space:]]*$//g')
     
+    # Also look for "run" commands that should be translated to node/python
+    local run_commands=$(grep -E '(run|execute|start)[[:space:]]+[a-zA-Z0-9_.-]+\.(js|py|sh|rb)' "$temp_response" | \
+        sed 's/.*\(run\|execute\|start\)[[:space:]]\+//' | \
+        sed 's/^[[:space:]]*//g' | sed 's/[[:space:]]*$//g' | \
+        while read -r file; do
+            case "$file" in
+                *.js) echo "node $file" ;;
+                *.py) echo "python $file" ;;
+                *.sh) echo "bash $file" ;;
+                *.rb) echo "ruby $file" ;;
+            esac
+        done)
+    
     # Combine and deduplicate commands
-    local all_commands=$(echo -e "$backtick_commands\n$plain_commands" | sort -u)
+    local all_commands=$(echo -e "$backtick_commands\n$plain_commands\n$run_commands" | sort -u)
     
     # Process commands
     while IFS= read -r cmd; do
@@ -664,6 +815,9 @@ init_conversation_storage
 current_conversation=$(load_current_conversation)
 echo -e "\033[1;32mCurrent conversation: $current_conversation\033[0m"
 
+# Verify conversation integrity
+verify_conversation "$current_conversation"
+
 # Check if we're in a git repository or project directory
 if [[ -d ".git" ]] || [[ -f "package.json" ]] || [[ -f "requirements.txt" ]] || [[ -f "pom.xml" ]]; then
     # Check if codebase needs analysis (if index doesn't exist or is older than 24 hours)
@@ -672,12 +826,26 @@ if [[ -d ".git" ]] || [[ -f "package.json" ]] || [[ -f "requirements.txt" ]] || 
         analyze_codebase
     else
         echo -e "\033[1;32m✓ Using existing codebase analysis\033[0m"
+    [[ "${CLIII_SHOW_VERIFY:-true}" == "true" ]] && show_verification
     fi
 fi
 
 while true; do
     read -r -p "> " user_input
 
+    # Handle direct run commands
+    if [[ "$user_input" =~ ^run[[:space:]]+([a-zA-Z0-9_.-]+\.(js|py|sh|rb))$ ]]; then
+        local file_to_run="${BASH_REMATCH[1]}"
+        local ext="${BASH_REMATCH[2]}"
+        case "$ext" in
+            js) execute_command_safe "node $file_to_run" ;;
+            py) execute_command_safe "python $file_to_run" ;;
+            sh) execute_command_safe "bash $file_to_run" ;;
+            rb) execute_command_safe "ruby $file_to_run" ;;
+        esac
+        continue
+    fi
+    
     # Handle special commands
     case "$user_input" in
         "exit")
@@ -732,22 +900,33 @@ while true; do
 
     # Display animation while waiting for response
     display_animation &
+    animation_pid=$!
 
     # Send user input to ThinkAI and get response with context
     response=$(send_to_thinkai "$user_input" "$current_conversation")
+    api_exit_code=$?
 
     # Kill the animation process
-    kill $!; wait $! 2>/dev/null
+    kill $animation_pid 2>/dev/null || true
+    wait $animation_pid 2>/dev/null || true
     echo -ne "\r"
 
-    # Extract just the response text (assuming JSON response)
-    if command -v jq &> /dev/null; then
-        response_text=$(echo "$response" | jq -r '.response // .message // .' 2>/dev/null || echo "$response")
+    # Check if API call failed
+    if [[ $api_exit_code -ne 0 ]] || [[ -z "$response" ]]; then
+        response_text="Error: Failed to get response from AI. Please check your connection and try again."
+        echo -e "\033[1;31m$response_text\033[0m"
+        # Log error
+        log_error "API call failed for conversation $current_conversation"
     else
-        response_text="$response"
+        # Extract just the response text (assuming JSON response)
+        if command -v jq &> /dev/null; then
+            response_text=$(echo "$response" | jq -r '.response // .message // .' 2>/dev/null || echo "$response")
+        else
+            response_text="$response"
+        fi
     fi
     
-    # Save assistant response to conversation
+    # Always save assistant response to conversation (even if it's an error)
     save_to_conversation "$current_conversation" "assistant" "$response_text"
 
     # Display the response with color
@@ -762,7 +941,7 @@ while true; do
         operations=$(parse_ai_response_to_operations "$response_text")
         if [[ -n "$operations" ]]; then
             # Show what we're about to do
-            local num_ops=$(echo "$operations" | jq 'length' 2>/dev/null || echo 0)
+            num_ops=$(echo "$operations" | jq 'length' 2>/dev/null || echo 0)
             if [[ $num_ops -gt 0 ]]; then
                 echo -e "\n\033[1;36m🤖 Agentic mode: Found $num_ops operations to execute\033[0m"
             fi
@@ -781,7 +960,7 @@ while true; do
             # Extract the command field, or empty if not found
             cmd=$(echo "$response" | jq -r '.command // empty' 2>/dev/null)
             if [[ -n "$cmd" ]]; then  # -n checks if string is not empty
-                execute_command "$cmd"
+                execute_command_safe "$cmd"
             fi
         fi
         
@@ -820,7 +999,8 @@ while true; do
                     "command")
                         cmd=$(echo "$response" | jq -r ".operations[$i].command" 2>/dev/null)
                         working_dir=$(echo "$response" | jq -r ".operations[$i].working_dir // empty" 2>/dev/null)
-                        execute_command "$cmd" "$working_dir"
+                        echo -e "\033[1;34mDEBUG: About to execute command: '$cmd'\033[0m" >&2
+                        execute_command_safe "$cmd" "$working_dir"
                         ;;
                     *)
                         echo -e "\033[1;33m⚠ Unknown operation type: $op_type\033[0m"
@@ -836,7 +1016,7 @@ while true; do
             # The || true prevents the script from exiting if grep finds nothing
             cmd=$(echo "$response" | grep -oP '(?<="command": ")[^"]+' || true)
             if [[ -n "$cmd" ]]; then
-                execute_command "$cmd"
+                execute_command_safe "$cmd"
             fi
         fi
         
