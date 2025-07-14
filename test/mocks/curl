@@ -1,5 +1,17 @@
 #!/bin/bash
-if [[ "$MOCK_CURL_EXIT_CODE" -ne 0 ]]; then
-    exit "$MOCK_CURL_EXIT_CODE"
+if [[ "$*" == *"api/chat"* ]]; then
+    cat << 'RESPONSE'
+{
+    "response": "Running Python script in src directory",
+    "operations": [
+        {
+            "type": "command",
+            "command": "pwd > location.txt && python test.py > output.txt 2>&1",
+            "working_dir": "project/src"
+        }
+    ]
+}
+RESPONSE
+else
+    /usr/bin/curl "$@"
 fi
-echo "$MOCK_CURL_OUTPUT"

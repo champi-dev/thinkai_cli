@@ -116,22 +116,99 @@ display_animation() {
 # Function to handle file operations
 handle_file_operations() {
     local operation=$1
-    local file_content=$2
-    local file_name=$3
+    local content=$2
+    local file_path=$3
+    local old_content=$4
 
-    if [[ "$operation" == "write" ]]; then
-        echo "$file_content" > "$file_name"
-        echo -e "\033[1;32mFile $file_name has been written.\033[0m"
-    else
-        echo -e "\033[1;31mUnknown file operation: $operation\033[0m"
-    fi
+    case "$operation" in
+        "write")
+            # Create directory if it doesn't exist
+            mkdir -p "$(dirname "$file_path")"
+            echo -e "$content" > "$file_path"
+            echo -e "\033[1;32m✓ File $file_path has been written\033[0m"
+            ;;
+        "edit")
+            if [[ -f "$file_path" ]]; then
+                # Replace old content with new content
+                if [[ -n "$old_content" ]]; then
+                    sed -i "s|$old_content|$content|g" "$file_path"
+                    echo -e "\033[1;32m✓ Edited file: $file_path\033[0m"
+                else
+                    echo -e "$content" > "$file_path"
+                    echo -e "\033[1;32m✓ Replaced content in: $file_path\033[0m"
+                fi
+            else
+                echo -e "\033[1;31m✗ File not found: $file_path\033[0m"
+            fi
+            ;;
+        "append")
+            mkdir -p "$(dirname "$file_path")"
+            echo -e "$content" >> "$file_path"
+            echo -e "\033[1;32m✓ Appended to file: $file_path\033[0m"
+            ;;
+        "delete")
+            if [[ -f "$file_path" ]]; then
+                rm "$file_path"
+                echo -e "\033[1;32m✓ Deleted file: $file_path\033[0m"
+            else
+                echo -e "\033[1;31m✗ File not found: $file_path\033[0m"
+            fi
+            ;;
+        "mkdir")
+            mkdir -p "$file_path"
+            echo -e "\033[1;32m✓ Created directory: $file_path\033[0m"
+            ;;
+        "read")
+            if [[ -f "$file_path" ]]; then
+                echo -e "\033[1;36m--- Content of $file_path ---\033[0m"
+                cat "$file_path"
+                echo -e "\033[1;36m--- End of file ---\033[0m"
+            else
+                echo -e "\033[1;31m✗ File not found: $file_path\033[0m"
+            fi
+            ;;
+        *)
+            echo -e "\033[1;31m✗ Unknown file operation: $operation\033[0m"
+            ;;
+    esac
 }
 
 # Function to execute a command locally
 execute_command() {
     local command=$1
+    local working_dir=$2
+    
     echo -e "\033[1;33mExecuting command: $command\033[0m"
-    eval "$command"
+    
+    # Change to working directory if specified
+    if [[ -n "$working_dir" ]]; then
+        pushd "$working_dir" > /dev/null 2>&1
+    fi
+    
+    # Execute command and capture output/error
+    local output
+    local exit_code
+    output=$(eval "$command" 2>&1)
+    exit_code=$?
+    
+    # Display output
+    if [[ -n "$output" ]]; then
+        echo "$output"
+    fi
+    
+    # Show status
+    if [[ $exit_code -eq 0 ]]; then
+        echo -e "\033[1;32m✓ Command executed successfully\033[0m"
+    else
+        echo -e "\033[1;31m✗ Command failed with exit code: $exit_code\033[0m"
+    fi
+    
+    # Return to original directory
+    if [[ -n "$working_dir" ]]; then
+        popd > /dev/null 2>&1
+    fi
+    
+    return $exit_code
 }
 
 # List all conversations
@@ -264,17 +341,72 @@ while true; do
     # Display the response with color
     display_colored_text "$response_text"
 
-    # Parse the response (this is a simplified example)
-    if [[ "$response" == *"execute"* ]]; then
-        command=$(echo "$response" | grep -oP '(?<="command": ")[^"]+')
-        execute_command "$command"
-    fi
-    
-    if [[ "$response" == *"file_operation"* ]]; then
-        operation=$(echo "$response" | grep -oP '(?<="operation": ")[^"]+')
-        file_content=$(echo "$response" | grep -oP '(?<="content": ")[^"]+')
-        file_name=$(echo "$response" | grep -oP '(?<="file_name": ")[^"]+')
-        handle_file_operations "$operation" "$file_content" "$file_name"
+    # Parse response for operations (enhanced parsing)
+    if command -v jq &> /dev/null; then
+        # Check for legacy execute format
+        if [[ $(echo "$response" | jq -r '.execute // false' 2>/dev/null) == "true" ]]; then
+            cmd=$(echo "$response" | jq -r '.command // empty' 2>/dev/null)
+            if [[ -n "$cmd" ]]; then
+                execute_command "$cmd"
+            fi
+        fi
+        
+        # Check for legacy file_operation format
+        if [[ $(echo "$response" | jq -r '.file_operation // false' 2>/dev/null) == "true" ]]; then
+            operation=$(echo "$response" | jq -r '.operation // empty' 2>/dev/null)
+            file_path=$(echo "$response" | jq -r '.file_name // empty' 2>/dev/null)
+            content=$(echo "$response" | jq -r '.content // empty' 2>/dev/null)
+            if [[ -n "$operation" && -n "$file_path" ]]; then
+                handle_file_operations "$operation" "$content" "$file_path"
+            fi
+        fi
+        
+        # Check if response contains operations
+        has_operations=$(echo "$response" | jq -r '.operations // empty' 2>/dev/null)
+        
+        if [[ -n "$has_operations" ]]; then
+            # Process each operation
+            num_ops=$(echo "$response" | jq '.operations | length' 2>/dev/null || echo 0)
+            
+            for ((i=0; i<num_ops; i++)); do
+                op_type=$(echo "$response" | jq -r ".operations[$i].type" 2>/dev/null)
+                
+                case "$op_type" in
+                    "file")
+                        operation=$(echo "$response" | jq -r ".operations[$i].operation" 2>/dev/null)
+                        file_path=$(echo "$response" | jq -r ".operations[$i].path" 2>/dev/null)
+                        content=$(echo "$response" | jq -r ".operations[$i].content // empty" 2>/dev/null)
+                        old_content=$(echo "$response" | jq -r ".operations[$i].old_content // empty" 2>/dev/null)
+                        handle_file_operations "$operation" "$content" "$file_path" "$old_content"
+                        ;;
+                    "command")
+                        cmd=$(echo "$response" | jq -r ".operations[$i].command" 2>/dev/null)
+                        working_dir=$(echo "$response" | jq -r ".operations[$i].working_dir // empty" 2>/dev/null)
+                        execute_command "$cmd" "$working_dir"
+                        ;;
+                    *)
+                        echo -e "\033[1;33m⚠ Unknown operation type: $op_type\033[0m"
+                        ;;
+                esac
+            done
+        fi
+    else
+        # Fallback: Simple pattern matching for backwards compatibility
+        if [[ "$response" == *"execute"* ]]; then
+            cmd=$(echo "$response" | grep -oP '(?<="command": ")[^"]+' || true)
+            if [[ -n "$cmd" ]]; then
+                execute_command "$cmd"
+            fi
+        fi
+        
+        if [[ "$response" == *"file_operation"* ]]; then
+            operation=$(echo "$response" | grep -oP '(?<="operation": ")[^"]+' || true)
+            file_path=$(echo "$response" | grep -oP '(?<="file_name": ")[^"]+' || true)
+            content=$(echo "$response" | grep -oP '(?<="content": ")[^"]+' || true)
+            if [[ -n "$operation" && -n "$file_path" ]]; then
+                handle_file_operations "$operation" "$content" "$file_path"
+            fi
+        fi
     fi
 done
 
